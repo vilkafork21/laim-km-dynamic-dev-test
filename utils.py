@@ -17,5 +17,5 @@ def transform_to_int(value):
     """
     try:
         return int(float(value))
-    except:
+    except Exception:
         return None
