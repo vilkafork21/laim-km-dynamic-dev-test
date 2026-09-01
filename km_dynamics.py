@@ -159,41 +159,6 @@ def materialize_main_metric(
     return result, None
 
 
-def _helpers():
-    from html_report_helper import (
-        display_semaphore,
-        show_criteria_semaphore,
-    )
-    return display_semaphore, show_criteria_semaphore
-
-
-_TABLE_STYLES = [
-    {
-        "selector": "th",
-        "props": [
-            ("background-color", "#f5f5f5"),
-            ("text-align", "center"),
-            ("border", "1px solid #ddd"),
-            ("padding", "5px"),
-        ],
-    },
-    {
-        "selector": "td",
-        "props": [
-            ("text-align", "left"),
-            ("border", "1px solid #ddd"),
-            ("padding", "5px"),
-        ],
-    },
-    {
-        "selector": "",
-        "props": [("border-collapse", "collapse"), ("border", "1px solid black")],
-    },
-]
-
-_WIDGET_COLOR = {"yellow": "yellow", "gray": "grey"}
-
-
 def plot_km_dynamics(
     name: str | None,
     baseline: float,
@@ -298,77 +263,290 @@ def _report_html(
     green_threshold: float = 0.15,
     c_min_threshold: float = 0.25,
 ) -> str:
-    display_semaphore, show_criteria_semaphore = _helpers()
-    criteria = show_criteria_semaphore(
-        f"Относительное снижение КМ не более {green_threshold:.0%}",
-        f"Относительное снижение КМ от {green_threshold:.0%} до {c_min_threshold:.0%}",
-        f"Относительное снижение КМ более {c_min_threshold:.0%}",
-        "КМ или оценка ассесора невычислимы",
-        _TABLE_STYLES,
-    ).to_html(border=0, classes="table")
+    statuses = {
+        "green": "В норме",
+        "yellow": "Требует внимания",
+        "red": "Критично",
+        "gray": "Недостаточно данных",
+    }
+    report_color = color if color in statuses else "gray"
+    status = statuses[report_color]
+    metric_name = html.escape(str(name or "Ключевая метрика"))
+    reason_text = html.escape(reason or "Не указан")
+    mode_text = html.escape(assessment_mode or "Не определён")
+
+    def decimal(value: float | None, digits: int) -> str:
+        return "—" if value is None else f"{value:.{digits}f}".replace(".", ",")
+
+    def percent(value: float) -> str:
+        return f"{value:.1%}".replace(".0%", "%").replace(".", ",")
+
+    if delta is None:
+        change_text = "—"
+        marker_text = ""
+    elif delta > 0:
+        change_text = f"−{percent(delta)}"
+        marker_text = f"Снижение {percent(delta)}"
+    elif delta < 0:
+        change_text = f"+{percent(abs(delta))}"
+        marker_text = f"Рост {percent(abs(delta))}"
+    else:
+        change_text = "0%"
+        marker_text = "Без изменений"
 
     total_units = coverage.get("total_units")
     scored_units = coverage.get("scored_units")
     coverage_text = (
-        "не определено"
+        "Не определено"
         if total_units is None and scored_units is None
-        else f"{scored_units if scored_units is not None else '?'} / "
-        f"{total_units if total_units is not None else '?'}"
+        else f"{scored_units if scored_units is not None else '—'} / "
+        f"{total_units if total_units is not None else '—'}"
     )
-    semaphore_html = display_semaphore(_WIDGET_COLOR.get(color, color), return_html=True)
-    rows = pd.DataFrame(
-        {
-            "Показатель": [
-                "Метрика",
-                "Значение КМ на валидации",
-                "Значение КМ на мониторинге",
-                "Относительное снижение",
-                "Точность автоассесора (калибровка)",
-                "Режим оценки",
-                "Покрытие, scored / total",
-                "Комментарий",
-                "Результат теста",
-            ],
-            "Значение": [
-                html.escape("не определена" if name is None else str(name)),
-                "не определено" if baseline is None else f"{baseline:.6g}",
-                "не определено" if current is None else f"{current:.6g}",
-                "не определено" if delta is None else f"{delta:.1%}",
-                "не определена" if accuracy is None else f"{accuracy:.3f}",
-                html.escape(assessment_mode or "не определён"),
-                coverage_text,
-                html.escape(reason),
-                semaphore_html,
-            ],
-        }
-    )
-    try:
-        results = rows.style.hide().set_table_styles(_TABLE_STYLES)
-    except AttributeError:
-        results = rows.style.hide_index().set_table_styles(_TABLE_STYLES)
-    results_html = results.to_html(border=0, classes="table")
+    coverage_text = html.escape(coverage_text)
 
-    plot_html = ""
-    if baseline is not None and current is not None:
-        plot_html = plot_km_dynamics(
-            name, baseline, current, accuracy, green_threshold, c_min_threshold
+    green_stop = min(100.0, max(0.0, green_threshold * 100.0))
+    red_stop = min(100.0, max(green_stop, c_min_threshold * 100.0))
+    scale_style = (
+        f"--normal-width:{green_stop:.4g}%;"
+        f"--attention-width:{red_stop - green_stop:.4g}%;"
+        f"--critical-width:{100.0 - red_stop:.4g}%"
+    )
+    marker_html = ""
+    if delta is not None and report_color != "gray":
+        marker_position = min(100.0, max(0.0, delta * 100.0))
+        marker_edge = (
+            " km-report__marker--start"
+            if marker_position <= 8.0
+            else " km-report__marker--end" if marker_position >= 92.0 else ""
         )
+        scale_style += f";--marker-position:{marker_position:.4g}%"
+        marker_html = f"""
+            <span class="km-report__marker{marker_edge}" aria-label="{marker_text}">
+                <span class="km-report__marker-value">{marker_text}</span>
+            </span>"""
 
     return f"""
-<h2 style="text-align: center;">Тест на динамику ключевой метрики</h2>
-<p style="text-align: left;"><b>Цель теста</b></p>
-<p style="text-align: left;">Оценить изменение ключевой метрики качества агента на мониторинговых данных относительно значения первичной валидации.</p>
-<p style="text-align: left;">Оценки мониторинговых диалогов выставляет автоассесор, откалиброванный на эталонной разметке тестовой корзины.</p>
-<p style="text-align: left;"><b>Алгоритм расчета</b></p>
-<ol style="text-align: left; margin-left: 20px; padding-left: 20px;">
-    <li style="text-align: left;">Единицы оценки формируются по assessment_mode контракта, ключевая метрика агрегируется по правилам monitoring_metric.</li>
-    <li style="text-align: left;">Вычисляется относительное снижение КМ мониторинга к КМ первичной валидации.</li>
-</ol>
-<p style="text-align: left;"><b>Критерии выставления светофора</b></p>
-<div style="text-align: left; width: 100%;">{criteria}</div><br>
-<p style="text-align: left;"><b>Результаты теста</b></p>
-<div style="text-align: left; width: 100%;">{results_html}</div><br>
-{plot_html}
+<style>
+.km-report {{
+    --ink: #1c1b18;
+    --muted: #747168;
+    --line: #e2e0d9;
+    --paper: #fffefa;
+    width: min(760px, calc(100% - 32px));
+    margin: 24px auto;
+    padding: 42px 46px 34px;
+    box-sizing: border-box;
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid #dedcd5;
+    border-top: 3px solid var(--ink);
+    box-shadow: 0 14px 36px -28px rgba(28, 27, 24, .45);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+}}
+.km-report *, .km-report *::before, .km-report *::after {{ box-sizing: border-box; }}
+.km-report--green {{ --status: #4f7a4e; --status-border: #b5c9b4; --status-bg: #f4f8f3; }}
+.km-report--yellow {{ --status: #84671f; --status-border: #d9c58c; --status-bg: #fbf8ed; }}
+.km-report--red {{ --status: #a54235; --status-border: #d9b3ac; --status-bg: #fbf4f2; }}
+.km-report--gray {{ --status: #65635d; --status-border: #cfcdc6; --status-bg: #f5f4f1; }}
+.km-report__header {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }}
+.km-report__eyebrow,
+.km-report__metric-label {{
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}}
+.km-report__title {{ margin: 8px 0 0; font: 700 32px/1.15 Georgia, serif; letter-spacing: -.01em; }}
+.km-report__status {{
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+    margin-top: 3px;
+    padding: 7px 12px;
+    color: var(--status);
+    background: var(--status-bg);
+    border: 1px solid var(--status-border);
+    font-size: 13px;
+    font-weight: 700;
+}}
+.km-report__status-mark {{ width: 8px; height: 8px; border-radius: 50%; background: var(--status); }}
+.km-report__metric {{ margin-top: 30px; padding-top: 26px; border-top: 1px solid var(--line); }}
+.km-report__metric-name {{ margin: 7px 0 0; font-size: 17px; font-weight: 650; overflow-wrap: anywhere; }}
+.km-report__facts {{
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 28px 0 0;
+    border-top: 1px solid var(--ink);
+    border-bottom: 1px solid var(--line);
+}}
+.km-report__fact {{ min-width: 0; padding: 14px 12px 15px 0; }}
+.km-report__fact + .km-report__fact {{ padding-left: 14px; border-left: 1px solid var(--line); }}
+.km-report__fact dt {{ color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }}
+.km-report__fact dd {{ margin: 7px 0 0; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }}
+.km-report__fact--change dd {{ color: var(--status); }}
+.km-report__scale-section {{ margin-top: 30px; }}
+.km-report__scale-heading {{ display: flex; justify-content: space-between; gap: 16px; align-items: baseline; }}
+.km-report__scale-title {{ margin: 0; font-size: 14px; font-weight: 700; }}
+.km-report__scale-threshold {{ color: var(--muted); font-size: 12px; text-align: right; }}
+.km-report__scale {{ position: relative; margin-top: 34px; }}
+.km-report__track {{ display: flex; height: 6px; overflow: hidden; border-radius: 3px; }}
+.km-report__zone--normal {{ width: var(--normal-width); background: #8fa88c; }}
+.km-report__zone--attention {{ width: var(--attention-width); background: #d1b467; }}
+.km-report__zone--critical {{ width: var(--critical-width); background: #dfbbb4; }}
+.km-report__marker {{
+    position: absolute;
+    top: -29px;
+    bottom: -7px;
+    left: var(--marker-position);
+    width: 1px;
+    background: var(--ink);
+}}
+.km-report__marker::after {{
+    content: "";
+    position: absolute;
+    bottom: -3px;
+    left: 50%;
+    width: 8px;
+    height: 8px;
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: var(--ink);
+}}
+.km-report__marker-value {{
+    position: absolute;
+    top: 0;
+    left: 0;
+    padding: 3px 7px;
+    transform: translateX(-50%);
+    border-radius: 3px;
+    color: #fff;
+    background: var(--ink);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.4;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}}
+.km-report__marker--start .km-report__marker-value {{ transform: none; }}
+.km-report__marker--end .km-report__marker-value {{ transform: translateX(-100%); }}
+.km-report__legend {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 20px; }}
+.km-report__legend-item {{ min-width: 0; font-size: 12px; }}
+.km-report__legend-range {{ display: flex; align-items: center; gap: 7px; font-weight: 700; }}
+.km-report__legend-dot {{ width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; }}
+.km-report__legend-dot--normal {{ background: #688865; }}
+.km-report__legend-dot--attention {{ background: #a8842f; }}
+.km-report__legend-dot--critical {{ background: #a54235; }}
+.km-report__legend-label {{ margin: 2px 0 0 15px; color: var(--muted); }}
+.km-report__details {{ margin-top: 28px; border: 1px solid var(--line); }}
+.km-report__details summary {{ padding: 13px 18px; cursor: pointer; color: #55524a; font-size: 13px; font-weight: 700; }}
+.km-report__technical {{
+    display: grid;
+    grid-template-columns: minmax(150px, 210px) 1fr;
+    gap: 7px 18px;
+    margin: 0;
+    padding: 14px 18px 18px;
+    border-top: 1px solid var(--line);
+    color: #55524a;
+    font-size: 13px;
+}}
+.km-report__technical dt {{ color: var(--muted); }}
+.km-report__technical dd {{ margin: 0; overflow-wrap: anywhere; }}
+@media (max-width: 620px) {{
+    .km-report {{ width: calc(100% - 20px); margin: 10px auto; padding: 28px 22px; }}
+    .km-report__header {{ display: block; }}
+    .km-report__status {{ margin-top: 18px; }}
+    .km-report__title {{ font-size: 27px; }}
+    .km-report__facts {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    .km-report__fact:nth-child(3) {{ padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }}
+    .km-report__fact:nth-child(4) {{ border-top: 1px solid var(--line); }}
+    .km-report__legend {{ grid-template-columns: 1fr; gap: 10px; }}
+    .km-report__technical {{ grid-template-columns: 1fr; gap: 2px; }}
+    .km-report__technical dd + dt {{ margin-top: 7px; }}
+}}
+@media print {{
+    .km-report {{ width: 100%; margin: 0; border-right: 0; border-bottom: 0; border-left: 0; box-shadow: none; }}
+    .km-report__details {{ display: none; }}
+}}
+</style>
+<article class="km-report km-report--{report_color}" lang="ru">
+    <header class="km-report__header">
+        <div>
+            <div class="km-report__eyebrow">Результат контрольной проверки</div>
+            <h1 class="km-report__title">Динамика ключевой метрики</h1>
+        </div>
+        <div class="km-report__status" role="status">
+            <span class="km-report__status-mark" aria-hidden="true"></span>
+            <span>{status}</span>
+        </div>
+    </header>
+
+    <section class="km-report__metric" aria-labelledby="km-report-metric">
+        <div class="km-report__metric-label">Метрика</div>
+        <h2 class="km-report__metric-name" id="km-report-metric">{metric_name}</h2>
+    </section>
+
+    <dl class="km-report__facts">
+        <div class="km-report__fact">
+            <dt>Исходное значение</dt>
+            <dd>{decimal(baseline, 2)}</dd>
+        </div>
+        <div class="km-report__fact">
+            <dt>Текущее значение</dt>
+            <dd>{decimal(current, 2)}</dd>
+        </div>
+        <div class="km-report__fact km-report__fact--change">
+            <dt>Изменение</dt>
+            <dd>{change_text}</dd>
+        </div>
+        <div class="km-report__fact">
+            <dt>Покрытие данных</dt>
+            <dd>{coverage_text}</dd>
+        </div>
+    </dl>
+
+    <section class="km-report__scale-section" aria-labelledby="km-report-scale">
+        <div class="km-report__scale-heading">
+            <h2 class="km-report__scale-title" id="km-report-scale">Снижение относительно исходного уровня</h2>
+            <div class="km-report__scale-threshold">Критический порог: {percent(c_min_threshold)}</div>
+        </div>
+        <div class="km-report__scale" style="{scale_style}">
+            <div class="km-report__track" aria-label="Зоны снижения ключевой метрики">
+                <span class="km-report__zone--normal"></span>
+                <span class="km-report__zone--attention"></span>
+                <span class="km-report__zone--critical"></span>
+            </div>
+            {marker_html}
+        </div>
+        <div class="km-report__legend">
+            <div class="km-report__legend-item">
+                <div class="km-report__legend-range"><span class="km-report__legend-dot km-report__legend-dot--normal" aria-hidden="true"></span>≤ {percent(green_threshold)}</div>
+                <div class="km-report__legend-label">В норме</div>
+            </div>
+            <div class="km-report__legend-item">
+                <div class="km-report__legend-range"><span class="km-report__legend-dot km-report__legend-dot--attention" aria-hidden="true"></span>{percent(green_threshold)}–{percent(c_min_threshold)}</div>
+                <div class="km-report__legend-label">Требует внимания</div>
+            </div>
+            <div class="km-report__legend-item">
+                <div class="km-report__legend-range"><span class="km-report__legend-dot km-report__legend-dot--critical" aria-hidden="true"></span>≥ {percent(c_min_threshold)}</div>
+                <div class="km-report__legend-label">Критично</div>
+            </div>
+        </div>
+    </section>
+
+    <details class="km-report__details">
+        <summary>Параметры расчёта</summary>
+        <dl class="km-report__technical">
+            <dt>Комментарий</dt><dd>{reason_text}</dd>
+            <dt>Режим оценки</dt><dd>{mode_text}</dd>
+            <dt>Точность калибровки</dt><dd>{decimal(accuracy, 3)}</dd>
+            <dt>Формула изменения</dt><dd>(исходное − текущее) / исходное × 100%</dd>
+        </dl>
+    </details>
+</article>
 """.strip()
 
 
@@ -378,6 +556,7 @@ def _not_computable_result(
     reason: str,
     acc_auto: float | None,
     c_min_threshold: float,
+    green_threshold: float,
     status_details: dict | None = None,
 ) -> dict[str, object]:
     baseline_payload = contract.get("baseline")
@@ -417,6 +596,8 @@ def _not_computable_result(
             reason=reason,
             assessment_mode=contract.get("assessment_mode"),
             coverage=metric_details["coverage"],
+            green_threshold=green_threshold,
+            c_min_threshold=c_min_threshold,
         ),
     }
 
@@ -458,6 +639,7 @@ def km_dynamics_test(
             reason=contract.get("reason", "monitoring_metric невычислим"),
             acc_auto=acc_auto,
             c_min_threshold=c_min_threshold,
+            green_threshold=green_threshold,
         )
 
     if assessment_result is not None and not isinstance(assessment_result, dict):
@@ -471,6 +653,7 @@ def km_dynamics_test(
             reason=reason,
             acc_auto=acc_auto,
             c_min_threshold=c_min_threshold,
+            green_threshold=green_threshold,
             status_details=assessment_result,
         )
 
@@ -493,6 +676,7 @@ def km_dynamics_test(
                 reason=reason,
                 acc_auto=acc_auto,
                 c_min_threshold=c_min_threshold,
+                green_threshold=green_threshold,
                 status_details={
                     "total_units": len(scored_df),
                     "scored_units": 0,
@@ -507,6 +691,7 @@ def km_dynamics_test(
             ),
             acc_auto=acc_auto,
             c_min_threshold=c_min_threshold,
+            green_threshold=green_threshold,
             status_details={
                 "total_units": (
                     len(scored_df) if isinstance(scored_df, pd.DataFrame) else None
@@ -571,5 +756,7 @@ def km_dynamics_test(
             reason=reason,
             assessment_mode=contract["assessment_mode"],
             coverage=metric_details["coverage"],
+            green_threshold=green_threshold,
+            c_min_threshold=c_min_threshold,
         ),
     }
