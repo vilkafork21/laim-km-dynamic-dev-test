@@ -26,8 +26,11 @@ def main(
     assessment_result: dict | None = None,
     perv_validation_km: object = None,
     metric_spec: dict | None = None,
+    green_threshold: float = 0.15,
+    red_threshold: float = 0.25,
 ):
-    logger.info("Тест динамики ключевой метрики запущен")
+    logger.info("Тест динамики ключевой метрики запущен: пороги green<=%s, red>=%s",
+                green_threshold, red_threshold)
     result = km_dynamics_test(
         acc_auto=acc_auto,
         monitoring_metric=monitoring_metric,
@@ -35,6 +38,8 @@ def main(
         assessment_result=assessment_result,
         perv_validation_km=perv_validation_km,
         metric_spec=metric_spec,
+        green_threshold=green_threshold,
+        c_min_threshold=red_threshold,
     )
     color = result["trafic_light"]
     platform_color = _PLATFORM_COLOR.get(color, color)
@@ -55,7 +60,7 @@ def main(
             "km_delta": details["Дельта КМ"],
             "coverage": details["coverage"],
             "thresholds": {
-                "green": 0.15,
+                "green": green_threshold,
                 "red": details["Порог минимальной дельты КМ"],
             },
             "reason": result["reason"],
