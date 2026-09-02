@@ -13,7 +13,22 @@
             "type": "form",
             "label": "Настройка пределов метрики",
             "config": {
-              "components": []
+              "components": [
+                {
+                  "parameter": "green_threshold",
+                  "label": "Зелёная зона: относительное снижение КМ не больше",
+                  "uiComponent": "input",
+                  "type": "float",
+                  "defaultValue": 0.15
+                },
+                {
+                  "parameter": "red_threshold",
+                  "label": "Красная зона: относительное снижение КМ не меньше",
+                  "uiComponent": "input",
+                  "type": "float",
+                  "defaultValue": 0.25
+                }
+              ]
             }
           }
         ]

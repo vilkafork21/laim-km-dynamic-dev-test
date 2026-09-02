@@ -143,3 +143,18 @@ def test_optional_ports_can_be_absent():
     verdict = main(monitoring_metric=_metric())["all_results"]
     assert verdict["color"] == "gray" and verdict["status"] == "not_computable"
     assert verdict["reason"]
+
+
+def test_thresholds_are_node_settings():
+    # Пороги вердикта — настройки ноды, а не константы кода: тот же вход
+    # с более строгим красным порогом даёт красный.
+    kwargs = dict(
+        monitoring_metric=_metric(), scored_df=_scored_df(), acc_auto=0.95,
+        assessment_result={"contract_version": "laim-assessment-result.v1", "status": "computed",
+                           "assessment_mode": "dialogue", "total_units": 3, "scored_units": 3},
+        metric_spec={"main_metric": "main_metric", "status": "resolved"},
+    )
+    default = main(**kwargs)["all_results"]
+    strict = main(**kwargs, green_threshold=0.05, red_threshold=0.2)["all_results"]
+    assert default["color"] == "red" and default["thresholds"] == {"green": 0.15, "red": 0.25}
+    assert strict["color"] == "red" and strict["thresholds"] == {"green": 0.05, "red": 0.2}
