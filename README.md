@@ -37,7 +37,7 @@ laim-asessor-agent.assessment_result               ─► assessment_result ┘ 
 | Порт | Тип | Обязательность | Что приходит |
 |---|---|---|---|
 | `monitoring_metric` | default | обязательный | Контракт `laim-monitoring-metric.v2` после identity-гейта селектора: `status`, `name`, `assessment_mode`, `scoring`, `aggregation`, `baseline.value` |
-| `scored_df` | dataframe | в `descriptor.json` необязательный, в `main` без значения по умолчанию | Мониторинговые строки в формате тестового датасета с колонкой `main_metric` от ассессора |
+| `scored_df` | dataframe | нет: без него исход `not_computable` | Мониторинговые строки в формате тестового датасета с колонкой `main_metric` от ассессора |
 | `acc_auto` | default | необязательный | Точность калибровки автоассессора; только отображается в отчёте |
 | `assessment_result` | default | необязательный | Статус расчёта ассессора: `status`, `reason`, `total_units`, `scored_units` |
 | `perv_validation_km` | default | необязательный, не подключён | Явная КМ первичной валидации: `{name, value}`, число или JSON-строка; если подан — главнее `baseline.value` контракта |

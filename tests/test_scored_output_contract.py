@@ -135,3 +135,11 @@ def test_zero_baseline_is_not_computable_not_green():
         )["all_results"]
         assert verdict["color"] == "gray" and verdict["status"] == "not_computable"
         assert "нулю" in verdict["reason"]
+
+
+def test_optional_ports_can_be_absent():
+    # descriptor объявляет scored_df и acc_auto необязательными: вызов без
+    # них — штатная деградация, а не TypeError.
+    verdict = main(monitoring_metric=_metric())["all_results"]
+    assert verdict["color"] == "gray" and verdict["status"] == "not_computable"
+    assert verdict["reason"]
