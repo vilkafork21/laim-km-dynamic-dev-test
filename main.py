@@ -18,9 +18,9 @@ _TITLE = {
 
 
 def main(
-    acc_auto: float | None,
     monitoring_metric: dict,
-    scored_df: pd.DataFrame,
+    acc_auto: float | None = None,
+    scored_df: pd.DataFrame | None = None,
     assessment_result: dict | None = None,
     perv_validation_km: object = None,
     metric_spec: dict | None = None,
