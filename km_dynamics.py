@@ -17,6 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from laim_monitoring import aggregate_main_metric, validate_monitoring_metric
 
+logger = logging.getLogger(__name__)
+
 
 def _km_compatible_metric(payload: object) -> object:
     """Агрегирует готовый all_assessors score без повторной оценки голосов."""
@@ -537,7 +539,7 @@ def km_dynamics_test(
         color = "yellow"
         reason = "Снижение КМ находится в желтой зоне."
 
-    logging.info(
+    logger.info(
         "KM dynamics: baseline=%s current=%s delta=%s color=%s",
         baseline,
         current,
