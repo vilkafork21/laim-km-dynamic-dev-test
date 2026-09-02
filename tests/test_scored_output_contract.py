@@ -113,3 +113,25 @@ def test_canonical_main_metric_wins_over_selector_columns():
 
     verdict = result["all_results"]
     assert verdict["status"] == "computed", verdict["reason"]
+
+
+def test_zero_baseline_is_not_computable_not_green():
+    # Baseline 0 означает, что относительная динамика не определена: любой
+    # результат мониторинга (включая 0) — серый и not_computable, иначе
+    # агент с нулевой КМ получал бы зелёный, а агрегатор — противоречивую
+    # пару gray/computed.
+    metric = _metric()
+    metric["baseline"]["value"] = 0.0
+    metric["baseline"]["reported_value"] = 0.0
+    for scores in ([1.0, 1.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]):
+        frame = _scored_df()
+        frame["main_metric"] = scores
+        frame["agent_assessment_score"] = scores
+        verdict = main(
+            acc_auto=0.95, monitoring_metric=metric, scored_df=frame,
+            assessment_result={"contract_version": "laim-assessment-result.v1", "status": "computed",
+                               "assessment_mode": "dialogue", "total_units": 3, "scored_units": 3},
+            metric_spec={"main_metric": "main_metric", "status": "resolved"},
+        )["all_results"]
+        assert verdict["color"] == "gray" and verdict["status"] == "not_computable"
+        assert "нулю" in verdict["reason"]

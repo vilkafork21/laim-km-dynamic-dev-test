@@ -520,10 +520,9 @@ def km_dynamics_test(
     monitoring = compute_cluch_metrics(scored_df, contract)
     current = float(monitoring["value"])
 
-    if baseline == 0:
-        delta = 0.0 if current == 0 else None
-    else:
-        delta = (baseline - current) / baseline
+    # Нулевой baseline не задаёт масштаб: относительная динамика не
+    # определена при любом мониторинге, в том числе нулевом.
+    delta = None if baseline == 0 else (baseline - current) / baseline
 
     if delta is None:
         color = "gray"
@@ -557,7 +556,7 @@ def km_dynamics_test(
         },
     }
     return {
-        "status": "computed",
+        "status": "not_computable" if delta is None else "computed",
         "trafic_light": color,
         "reason": reason,
         "kluch_metric": metric_details,
