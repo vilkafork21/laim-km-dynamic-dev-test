@@ -8,6 +8,8 @@ import pandas as pd
 
 from km_dynamics import km_dynamics_test
 
+logger = logging.getLogger(__name__)
+
 _PLATFORM_COLOR = {"yellow": "amber", "gray": "gray"}
 _TITLE = {
     "green": "Динамика ключевой метрики соответствует зеленому светофору",
@@ -25,7 +27,7 @@ def main(
     perv_validation_km: object = None,
     metric_spec: dict | None = None,
 ):
-    logging.info("Тест динамики ключевой метрики запущен")
+    logger.info("Тест динамики ключевой метрики запущен")
     result = km_dynamics_test(
         acc_auto=acc_auto,
         monitoring_metric=monitoring_metric,
