@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from km_report import report_html
 from laim_monitoring import MonitoringContractError, unitize, validate_monitoring_metric
-from verdict import UNITS, drop, effective_n, interval
+from verdict import UNITS, Interval, drop, effective_n, interval
 from verdict import verdict as decide_color
 
 logger = logging.getLogger(__name__)
@@ -232,6 +232,7 @@ def _not_computable_result(
         "provenance": provenance,
         "warnings": [],
         "delta_unit": thresholds["unit"],
+        "judge_bias": None,
         "html_plot": report_html(
             name,
             baseline,
@@ -307,6 +308,18 @@ def km_dynamics_test(
         if not isinstance(reason, str) or not reason.strip():
             reason = f"assessment_status={assessment_result.get('status')!r}"
         return refused(reason, "assessment_not_computable")
+    calibration = (assessment_result or {}).get("calibration_metrics") or {}
+    admission = calibration.get("admission_status")
+    warnings: list[str] = []
+    if admission in {"red", "not_assessed"}:
+        return refused(
+            f"автоассессор не допущен (6.3.3): {calibration.get('admission_reason')}",
+            "judge_not_admitted",
+        )
+    if admission == "amber":
+        warnings.append(
+            f"допуск автоассессора жёлтый: {calibration.get('admission_reason')}"
+        )
 
     if metric_spec is not None:
         selector_spec = dict(metric_spec)
@@ -355,12 +368,37 @@ def km_dynamics_test(
     current = sum(s * w for s, w in zip(summary["scores"], summary["weights"])) / sum(
         summary["weights"]
     )
+    judge_bias = None
+    if calibration.get("bias_mean") is not None:
+        # Поправка на смещение судьи (карточка 6.3.4, шаги 8/10/12): КМ_тек − b,
+        # интервал расширяется на неопределённость самого смещения.
+        bias_mean = float(calibration["bias_mean"])
+        half = (
+            float(calibration["bias_ci_upper"]) - float(calibration["bias_ci_lower"])
+        ) / 2
+        tolerance = green_threshold if delta_unit == "absolute" else green_threshold * baseline
+        if half > tolerance:
+            return refused(
+                f"интервал смещения судьи ±{half:.3f} шире допустимого снижения КМ "
+                f"{tolerance:.3f}: ошибка измерителя способна изменить цвет",
+                "judge_bias_uncertain", provenance,
+            )
+        current -= bias_mean
+        ci = Interval(
+            ci.lower - bias_mean - half, ci.upper - bias_mean + half, ci.level,
+            f"{ci.method}+bias",
+        )
+        judge_bias = {
+            "mean": bias_mean,
+            "ci_lower": float(calibration["bias_ci_lower"]),
+            "ci_upper": float(calibration["bias_ci_upper"]),
+            "applied": True,
+        }
     decision = decide_color(
         baseline, ci, green_threshold=green_threshold, red_threshold=red_threshold,
         unit=delta_unit, c_min=c_min,
     )
     delta = drop(baseline, current, delta_unit)
-    warnings: list[str] = []
     if (contract.get("baseline") or {}).get("reconciliation") == "mismatch":
         warnings.append(
             "baseline.reconciliation=mismatch: пересчёт по корзине расходится с КМ "
@@ -391,6 +429,7 @@ def km_dynamics_test(
         "provenance": provenance,
         "warnings": warnings,
         "delta_unit": delta_unit,
+        "judge_bias": judge_bias,
         "html_plot": report_html(
             contract["name"],
             baseline,

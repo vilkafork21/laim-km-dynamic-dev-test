@@ -80,14 +80,15 @@ laim-asessor-agent.assessment_result               ─► assessment_result ┘ 
 
 ```text
 1. Контракт      validate_monitoring_metric(monitoring_metric, require_computed=False)
-2. Ассессор      assessment_result.status != computed -> серый с его reason
+2. Ассессор      assessment_result.status != computed -> серый с его reason; calibration_metrics.admission_status red/not_assessed -> серый judge_not_admitted, amber -> warning
 3. main_metric   metric_spec подан -> materialize_main_metric; иначе колонка обязана быть в scored_df
 4. Baseline      perv_validation_km, если подан, иначе baseline.value контракта; <= 0 -> серый
 5. Единицы       unitize по assessment_mode; отказы судьи (NaN) отдельно; веса по aggregation
 6. Минимумы      доля отказов > max_invalid_share -> серый; оценённых < min_valid_units -> серый
 7. Интервал      Уилсон (оценки 0/1) или нормальная аппроксимация (иные шкалы), эффективное n по Кишу
-8. Вердикт       границы интервала против green_threshold / red_threshold (в delta_unit) и c_min
-9. Публикация    all_results + HTML-отчёт в test_description
+8. Смещение      calibration_metrics.bias_mean задан -> КМ_тек − b, интервал расширен на половину интервала смещения; интервал смещения шире δ -> серый judge_bias_uncertain
+9. Вердикт       границы интервала против green_threshold / red_threshold (в delta_unit) и c_min
+10. Публикация   all_results + HTML-отчёт в test_description
 ```
 
 **1. Контракт.** `scoring.method = all_assessors` перед проверкой заменяется
@@ -164,9 +165,13 @@ INFO km_dynamics: [km] baseline=0.93 current=0.8297872340425532 interval=[0.7405
 - При `not_computable`: `km_monitoring`, `km_delta`, `interval` — `null`;
   `km_baseline` — значение контракта, если оно есть; `provenance` заполнен,
   если единицы удалось построить.
-- `warnings` — строки, не меняющие цвет: сейчас только
-  `baseline.reconciliation=mismatch` (пересчёт по корзине расходится с
-  отчётом; используется значение отчёта).
+- `warnings` — строки, не меняющие цвет: `baseline.reconciliation=mismatch`
+  (пересчёт по корзине расходится с отчётом; используется значение отчёта),
+  жёлтый допуск автоассессора.
+- `judge_bias` — применённая поправка на смещение судьи `{mean, ci_lower,
+  ci_upper, applied}` из `calibration_metrics` ассессора; `null`, если
+  ассессор смещение не публикует. `km_monitoring` и `interval` уже с поправкой,
+  `interval.method` получает суффикс `+bias`.
 - `metric_details` — те же числа с русскими ключами; `Порог минимальной
   дельты КМ` равен `red_threshold`.
 
@@ -191,6 +196,8 @@ INFO km_dynamics: [km] baseline=0.93 current=0.8297872340425532 interval=[0.7405
 | Baseline отсутствует или `<= 0` | `baseline_not_positive` |
 | Доля отказов судьи выше `max_invalid_share` | `judge_refusals` |
 | Оценённых единиц меньше `min_valid_units` | `insufficient_units` |
+| `calibration_metrics.admission_status` ассессора `red` или `not_assessed` | `judge_not_admitted` |
+| Интервал смещения судьи шире допустимого снижения δ | `judge_bias_uncertain` |
 
 `missing_policy` контракта применяется к пропускам разметки в эталоне; на
 отказы судьи в мониторинге она не действует.
