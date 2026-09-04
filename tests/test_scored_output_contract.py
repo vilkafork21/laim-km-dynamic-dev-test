@@ -291,6 +291,14 @@ def test_judge_bias_shifts_estimate_and_widens_interval():
     }
 
 
+def test_bias_corrected_interval_stays_in_metric_domain():
+    verdict = _run(_flat_frame(114, 6), assessment_result=_calibrated(
+        bias_mean=-0.1, bias_ci_lower=-0.12, bias_ci_upper=-0.08, bias_units=40,
+    ))
+    assert verdict["status"] == "computed"
+    assert verdict["km_monitoring"] <= 1.0 and verdict["interval"]["upper"] == 1.0
+
+
 def test_uncertain_judge_bias_blocks_verdict():
     verdict = _run(_flat_frame(108, 12), assessment_result=_calibrated(
         bias_mean=-0.05, bias_ci_lower=-0.4, bias_ci_upper=0.3, bias_units=8,
