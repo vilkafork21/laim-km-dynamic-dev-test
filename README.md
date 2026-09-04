@@ -1,21 +1,31 @@
 # laim-km-dynamic-test
 
-Нода мониторингового контура LAIM: считает ключевую метрику (КМ) агента на
-оценённых мониторинговых данных, сравнивает её с КМ первичной валидации и
-отдаёт в агрегатор светофор с числами: baseline, КМ мониторинга, снижение, покрытие.
+Нода мониторингового контура LAIM: тест 6.3.4 методики — уровень и динамика
+ключевой метрики (КМ). Считает КМ агента на оценённых мониторинговых
+единицах, строит интервал неопределённости, сравнивает с КМ первичной
+валидации и минимальным уровнем и отдаёт в агрегатор светофор с числами:
+baseline, КМ мониторинга, интервал, снижение, знаменатели.
 
 ## Зачем нода нужна
 
 Предыдущие шаги контура отвечают, как считать КМ и чему она равна на эталоне;
-эта нода отвечает, насколько КМ просела на мониторинге. Два проектных решения:
+эта нода отвечает, просела ли КМ на мониторинге, и насколько этому выводу
+можно верить. Решения:
 
-- **Считает контракт, а не нода.** Единица наблюдения, редьюсер и политика
-  пропусков берутся из `monitoring_metric` (`laim-monitoring-metric.v2`) —
-  та же агрегация, что у остальных потребителей контракта. Оценки строк
-  (`main_metric`) нода не пересчитывает: их уже поставил агент-ассессор.
-- **Деградация вместо падения.** Невычислимый контракт, отказ ассессора или
-  отсутствие `main_metric` дают серый светофор со статусом `not_computable` и
-  текстовой причиной; нода падает только на нарушении контракта данных.
+- **Считает контракт, а не нода.** Единица наблюдения и веса берутся из
+  `monitoring_metric` (`laim-monitoring-metric.v2`); оценки единиц
+  (`main_metric`) выставил автоассессор, нода их не пересчитывает.
+- **Цвет по границе интервала, а не по точке.** Зелёный — когда даже
+  пессимистичная граница интервала КМ не выходит за допустимое снижение и
+  минимальный уровень; красный — когда даже оптимистичная граница
+  подтверждает нарушение; иначе жёлтый. Малая выборка не даёт уверенного
+  цвета: меньше минимума единиц — тест не оценивается.
+- **Отказы судьи — не пропуски разметки.** Единица без оценки (`NaN`)
+  исключается из числителя и знаменателя независимо от `missing_policy`
+  контракта и считается отдельно; выше допустимой доли — тест не оценивается.
+- **Деградация вместо падения.** Невычислимый контракт, отказ ассессора,
+  отсутствие `main_metric`, недобор единиц дают серый светофор со статусом
+  `not_computable`, машинным `reason_code` и текстовой причиной.
 
 ## Место в контуре
 
@@ -36,7 +46,7 @@ laim-asessor-agent.assessment_result               ─► assessment_result ┘ 
 
 | Порт | Тип | Обязательность | Что приходит |
 |---|---|---|---|
-| `monitoring_metric` | default | обязательный | Контракт `laim-monitoring-metric.v2` после identity-гейта селектора: `status`, `name`, `assessment_mode`, `scoring`, `aggregation`, `baseline.value` |
+| `monitoring_metric` | default | обязательный | Контракт `laim-monitoring-metric.v2` после identity-гейта селектора: `status`, `name`, `assessment_mode`, `scoring`, `aggregation`, `baseline.value`, `baseline.reconciliation` |
 | `scored_df` | dataframe | нет: без него исход `not_computable` | Мониторинговые строки в формате тестового датасета с колонкой `main_metric` от ассессора |
 | `acc_auto` | default | необязательный | Точность калибровки автоассессора; только отображается в отчёте |
 | `assessment_result` | default | необязательный | Статус расчёта ассессора: `status`, `reason`, `total_units`, `scored_units` |
@@ -48,14 +58,23 @@ laim-asessor-agent.assessment_result               ─► assessment_result ┘ 
 | Порт | Тип | Что отдаёт |
 |---|---|---|
 | `all_results` | default (JSON) | Вердикт теста для `laim-agg` (см. «Форматы выхода») |
-| `test_description` | hidden | HTML-отчёт: критерии светофора, таблица результатов, график КМ (PNG в base64) |
+| `test_description` | hidden | HTML-отчёт: критерии светофора, таблица результатов с интервалом и знаменателями, график КМ (PNG в base64) |
 
 ### Настройки
 
 | Настройка | По умолчанию | Зачем |
 |---|---|---|
-| `green_threshold` | `0.15` | Относительное снижение КМ не больше порога — зелёный |
-| `red_threshold` | `0.25` | Относительное снижение КМ не меньше порога — красный; между порогами — жёлтый (`amber`) |
+| `green_threshold` | `0.15` | Допустимое снижение КМ δ: зелёный, если пессимистичная граница интервала снижается не больше порога |
+| `red_threshold` | `0.25` | Подтверждённое снижение: красный, если оптимистичная граница интервала снижается не меньше порога |
+| `delta_unit` | `absolute` | Единицы порогов: `absolute` — в единицах шкалы метрики (для долей это п.п.), `relative` — доля от baseline |
+| `c_min` | `0.0` | Минимально допустимый уровень КМ; `0` — не задан (для метрики «больше — лучше» любое значение не ниже нуля) |
+| `min_valid_units` | `50` | Меньше оценённых единиц — тест не оценивается (`insufficient_units`) |
+| `max_invalid_share` | `0.2` | Выше доля отказов судьи — тест не оценивается (`judge_refusals`) |
+
+Пороги и минимумы — временные параметры мониторинга: значения по умолчанию
+сохраняют прежние границы 0.15/0.25, минимум 50 единиц выбран по
+биномиальной модели (при доле верных ответов 0.85 ошибка цвета от шума
+около 3–4 %) и подлежит калибровке на реальных агентах.
 
 ## Как проходит прогон
 
@@ -63,10 +82,12 @@ laim-asessor-agent.assessment_result               ─► assessment_result ┘ 
 1. Контракт      validate_monitoring_metric(monitoring_metric, require_computed=False)
 2. Ассессор      assessment_result.status != computed -> серый с его reason
 3. main_metric   metric_spec подан -> materialize_main_metric; иначе колонка обязана быть в scored_df
-4. Baseline      perv_validation_km, если подан, иначе baseline.value контракта
-5. Агрегация     aggregate_main_metric: единицы по assessment_mode, редьюсер, missing_policy
-6. Вердикт       delta = (baseline - current) / baseline -> цвет, reason
-7. Публикация    all_results + HTML-отчёт в test_description
+4. Baseline      perv_validation_km, если подан, иначе baseline.value контракта; <= 0 -> серый
+5. Единицы       unitize по assessment_mode; отказы судьи (NaN) отдельно; веса по aggregation
+6. Минимумы      доля отказов > max_invalid_share -> серый; оценённых < min_valid_units -> серый
+7. Интервал      Уилсон (оценки 0/1) или нормальная аппроксимация (иные шкалы), эффективное n по Кишу
+8. Вердикт       границы интервала против green_threshold / red_threshold (в delta_unit) и c_min
+9. Публикация    all_results + HTML-отчёт в test_description
 ```
 
 **1. Контракт.** `scoring.method = all_assessors` перед проверкой заменяется
@@ -82,84 +103,97 @@ laim-asessor-agent.assessment_result               ─► assessment_result ┘ 
 `resolution_source = monitoring_metric_judged_total` принудительно даёт
 `identity`.
 
-**5. Агрегация.** Единица наблюдения — по `assessment_mode`: `qa` и
+**5. Единицы.** Единица наблюдения — по `assessment_mode`: `qa` и
 `turn_with_history` — строка; `dialogue` — группа строк по
-`reference_group_id` (строка без группы становится своей группой), внутри
-которой `main_metric` обязан быть константен. Редьюсер `mean` или
-`frequency_weighted_mean` по `input_query_count`. Расчёт в `Decimal`.
+`reference_group_id`, внутри которой `main_metric` обязан быть константен.
+Вес единицы — `input_query_count` при `frequency_weighted_mean`, иначе 1.
+Единица с `NaN` в `main_metric` — отказ судьи: не входит ни в среднее, ни в
+знаменатель среднего, но входит в `total_units` и `refused_units`.
 
-**6. Вердикт.** `delta` — относительное снижение, доля от baseline, а не
-процентные пункты: при baseline 0.93 и мониторинге 0.8298 снижение на 0.10
-абсолютных даёт `delta = 0.1078`. Правило: `delta >= 0.25` — красный,
-`delta <= 0.15` — зелёный (рост КМ тоже зелёный), между ними — жёлтый.
-Baseline, равный нулю, при ненулевом мониторинге даёт серый.
+**7–8. Интервал и вердикт.** КМ мониторинга — взвешенное среднее оценённых
+единиц; интервал 95 %: Уилсон при оценках только 0/1, иначе нормальная
+аппроксимация с эффективным `n = (Σw)² / Σw²`. Снижение считается от
+baseline к границам интервала в единицах `delta_unit`. Красный: интервал
+целиком ниже `c_min` (`below_c_min`) или оптимистичное снижение `>=
+red_threshold` (`drop_confirmed`). Зелёный: пессимистичное снижение `<=
+green_threshold` и интервал не ниже `c_min` (`within_tolerance`). Иначе
+жёлтый (`drop_possible`; на порту `amber`). Рост КМ — зелёный.
 
-### Пример реального лога успешного прогона
+### Пример лога прогона
 
 ```text
-INFO main: Тест динамики ключевой метрики запущен
-INFO km_dynamics: KM dynamics: baseline=0.93 current=0.8297872340425532 delta=0.10775566231983535 color=green
+INFO main: [km] пороги green<=0.15 red>=0.25 unit=absolute c_min=None min_units=50 max_refused=0.2
+INFO km_dynamics: [km] baseline=0.93 current=0.8297872340425532 interval=[0.7405; 0.8930] drop=0.1002 unit=absolute color=yellow units={'unit': 'qa', 'total_units': 94, 'scored_units': 94, 'refused_units': 0, 'refused_share': 0.0, 'weight_sum': 94.0, 'n_effective': 94.0}
 ```
 
 ## Форматы выхода и контракты
 
-`all_results` (пример реального прогона):
+`all_results` (пример):
 
 ```json
 {
   "test_name": "km_test",
   "status": "computed",
-  "color": "green",
-  "calculated_traffic_lights": {"test_light": "green",
-    "semaphore_title": "Динамика ключевой метрики соответствует зеленому светофору"},
+  "color": "amber",
+  "calculated_traffic_lights": {"test_light": "amber",
+    "semaphore_title": "Динамика ключевой метрики соответствует желтому светофору"},
+  "reason": "Снижение КМ или нарушение минимального уровня возможно, но интервалом не подтверждено.",
+  "reason_code": "drop_possible",
   "km_name": "Accuracy",
   "km_baseline": 0.93,
   "km_monitoring": 0.8297872340425532,
-  "km_delta": 0.10775566231983535,
+  "km_delta": 0.10021276595744685,
+  "km_delta_unit": "absolute",
+  "interval": {"lower": 0.7405, "upper": 0.893, "level": 0.95, "method": "wilson"},
   "coverage": {"total_units": 94, "scored_units": 94, "excluded_units": 0, "weight_sum": 94.0},
-  "thresholds": {"green": 0.15, "red": 0.25},
-  "reason": "Снижение КМ находится в зеленой зоне.",
+  "provenance": {"unit": "qa", "total_units": 94, "scored_units": 94, "refused_units": 0,
+    "refused_share": 0.0, "weight_sum": 94.0, "n_effective": 94.0},
+  "thresholds": {"green": 0.15, "red": 0.25, "unit": "absolute", "c_min": null},
+  "warnings": [],
   "metric_details": {"name": "Accuracy", "КМ на мониторинге": 0.8297872340425532, "...": "..."}
 }
 ```
 
 - `status` — `computed` | `not_computable`; `color` и `test_light` —
-  `green` | `amber` | `red` | `gray` (внутренний `yellow` переводится
-  в `amber` для платформы). Платформа читает светофор из `all_results.color`
-  (`uiResults.semaphore`) и `calculated_traffic_lights.test_light`.
-- При `not_computable`: `km_monitoring`, `km_delta` — `null`; `km_baseline` —
-  значение контракта, если оно есть; `coverage.total_units`/`scored_units` —
-  из `assessment_result` или размера `scored_df`, остальные ключи `null`.
-- `metric_details` — те же числа с русскими ключами (`КМ на первичной
-  валидации`, `Дельта КМ`, `Порог минимальной дельты КМ`, `coverage`).
+  `green` | `amber` | `red` | `gray`. Платформа читает светофор из
+  `all_results.color` и `calculated_traffic_lights.test_light`.
+- `reason_code` при `computed`: `within_tolerance`, `drop_possible`,
+  `drop_confirmed`, `below_c_min`; при `not_computable`:
+  `upstream_not_computable`, `assessment_not_computable`, `metric_spec`,
+  `baseline_not_positive`, `judge_refusals`, `insufficient_units`.
+- При `not_computable`: `km_monitoring`, `km_delta`, `interval` — `null`;
+  `km_baseline` — значение контракта, если оно есть; `provenance` заполнен,
+  если единицы удалось построить.
+- `warnings` — строки, не меняющие цвет: сейчас только
+  `baseline.reconciliation=mismatch` (пересчёт по корзине расходится с
+  отчётом; используется значение отчёта).
+- `metric_details` — те же числа с русскими ключами; `Порог минимальной
+  дельты КМ` равен `red_threshold`.
 
 ## Падение против деградации
 
-Нода падает исключением, когда контракт данных нарушен и результат не может
-быть однозначным:
+Нода падает исключением, когда контракт данных нарушен:
 
 | Причина | Исключение |
 |---|---|
 | `monitoring_metric` не dict, неизвестная версия контракта/UMR, нет обязательных полей, `score_column != main_metric` | `MonitoringContractError` |
-| В `scored_df` нет `query_id`, `input_query`, `output_answer` | `MonitoringContractError` |
-| Пустой `main_metric` при `missing_policy = fail`; ни одной оценённой единицы; вес `input_query_count <= 0`; `main_metric` не константен внутри `dialogue`-группы | `MonitoringContractError` |
+| `scored_df` не приводится к UMR (нет `query_id`/`input_query`/`output_answer`, пустой `query_id`, смешаны формы); `main_metric` не константен внутри `dialogue`-группы; вес `input_query_count` не число или `<= 0` | `MonitoringContractError` |
 | `assessment_result` подан и не является dict; `scored_df` не DataFrame при поданном `metric_spec` | `TypeError` |
-| `perv_validation_km` не приводится к числу | `ValueError` |
+| `perv_validation_km` не приводится к числу; `delta_unit` вне `absolute`/`relative` | `ValueError` |
 
-Всё остальное — серый светофор, `status = not_computable`, причина в `reason`:
+Всё остальное — серый светофор, `status = not_computable`, причина в `reason` и `reason_code`:
 
-| Событие | `reason` |
+| Событие | `reason_code` |
 |---|---|
-| Контракт `monitoring_metric` со статусом `not_computable` | `reason` контракта или `monitoring_metric невычислим` |
-| `assessment_result.status != computed` | `reason` ассессора или `assessment_status='<status>'` |
-| `metric_spec.status = not_computable` | `reason` селектора или `kriteria-selector не разрешил ключевую метрику` |
-| Нет `main_metric` и нет `metric_spec` | `scored_df не содержит main_metric; подключите kriteria-selector.metric_spec к одноимённому порту KM` |
-| Колонки селектора отсутствуют, нечисловые, содержат пропуски при `fail`, небинарные для `all_*`/`majority`, ничья в `majority` | текст с именами колонок и числом невалидных значений |
-| Baseline равен нулю, КМ мониторинга не ноль | `Baseline КМ равен нулю, относительная динамика не определена.` (при этом `status = computed`) |
+| Контракт `monitoring_metric` со статусом `not_computable` | `upstream_not_computable` |
+| `assessment_result.status != computed` | `assessment_not_computable` |
+| `metric_spec.status = not_computable`, нет `main_metric`, колонки селектора непригодны | `metric_spec` |
+| Baseline отсутствует или `<= 0` | `baseline_not_positive` |
+| Доля отказов судьи выше `max_invalid_share` | `judge_refusals` |
+| Оценённых единиц меньше `min_valid_units` | `insufficient_units` |
 
-Политика пропусков контракта при агрегации: `fail` — исключение;
-`exclude_unit`/`exclude_value` — единица не учитывается и попадает в
-`excluded_units`; `zero` — засчитывается как 0.
+`missing_policy` контракта применяется к пропускам разметки в эталоне; на
+отказы судьи в мониторинге она не действует.
 
 ## Внешние сервисы
 
@@ -168,30 +202,36 @@ INFO km_dynamics: KM dynamics: baseline=0.93 current=0.8297872340425532 delta=0.
 
 ## Наблюдаемость
 
-В лог платформы уходят две строки через логгер модуля (см. пример выше);
-при сером светофоре второй строки нет — причина только в поле `reason`.
-Порта журнала у ноды нет, источник истины о прогоне это `all_results`: триаж
-на сотне прогонов делается по `status`, `color`, `reason` и
-`coverage.scored_units / total_units`.
+В лог платформы уходят две строки через логгер модуля (см. пример выше):
+настройки прогона и итог с интервалом и знаменателями. Порта журнала нет,
+источник истины о прогоне — `all_results`: триаж на сотне прогонов делается
+по `status`, `color`, `reason_code`, `interval` и `provenance`.
 
 ## Карта кода
 
 ```text
-main.py                    точка входа платформы: вызов теста, сборка all_results, цвет для платформы
-km_dynamics.py             материализация main_metric по metric_spec, вердикт, HTML-отчёт и график
-html_report_helper.py      виджет светофора и таблица критериев для HTML (display_semaphore, show_criteria_semaphore)
-laim_monitoring/           контракт laim-monitoring-metric.v2 (core.py): валидация, единицы наблюдения, Decimal-агрегация
+main.py                    точка входа платформы: настройки, вызов теста, сборка all_results, цвет для платформы
+km_dynamics.py             материализация main_metric по metric_spec, единицы и отказы, минимумы, вызов вердикта
+verdict.py                 интервал (Уилсон / нормальный, n по Кишу), снижение в единицах δ, правило цвета
+km_report.py               HTML-отчёт и график КМ
+html_report_helper.py      виджет светофора и таблица критериев для HTML
+laim_monitoring/           контракт laim-monitoring-metric.v2 (core.py): валидация, нормализация UMR, единицы
 utils.py                   transform_to_int; в sourceFiles не входит и нодой не вызывается
-tests/                     conftest.py (sys.path на корень ноды), test_scored_output_contract.py
+tests/                     test_verdict.py (интервал и правило цвета), test_scored_output_contract.py (контракт выхода, минимумы, отказы, настройки)
 ```
 
 ## Что делать, если
 
-- **Серый светофор с `reason` про `main_metric`** — на порт `metric_spec` не
+- **Серый `insufficient_units` при живом агенте** — оценённых единиц меньше
+  `min_valid_units`: увеличьте окно, выборку ассессора или, для пилота,
+  снизьте минимум осознанно и зафиксируйте это в параметрах мониторинга.
+- **Жёлтый при небольшом снижении** — интервал широк или судья строже
+  разметчиков (точечное снижение 0.10 при пессимистичной границе 0.19):
+  нужны единицы либо поправка на смещение судьи; красным это не станет без
+  подтверждения интервалом.
+- **Серый с `reason_code = metric_spec`** — на порт `metric_spec` не
   подключён `laim-kriteria-selector.metric_spec` или ассессор не отдал
   `main_metric`; проверьте `assessment_result.status` и колонки `scored_data`.
-- **Ожидали жёлтый, получили зелёный при снижении на 10 п.п.** — порог
-  относительный: 10 п.п. от 0.93 это `delta = 0.108 < 0.15`.
 - **`MonitoringContractError` про константность внутри `dialogue`** — ассессор
   выставил разные баллы репликам одной сессии; в режиме `dialogue` балл один
   на сессию.
@@ -202,19 +242,23 @@ tests/                     conftest.py (sys.path на корень ноды), te
 
 База `py312-simple`, точка входа — функция `main` в `main.py`,
 `descriptor.json` перечисляет `sourceFiles`: `main.py`, `km_dynamics.py`,
-`html_report_helper.py`, `laim_monitoring/__init__.py`,
-`laim_monitoring/core.py`. Нода самодостаточна: контракт лежит в вендорной
-копии `laim_monitoring/`. Зависимости `requirements.txt`: `pandas`,
-`matplotlib` (график), `ipython` (`IPython.display` в `html_report_helper.py`),
-`jinja2` (`Styler.to_html` в pandas). Проверка: `ruff check .` и
-`python -m pytest -q` из корня ноды на Python 3.12 (так же настроен CI).
-Отдельного теста соответствия `sourceFiles` диску в `tests/` нет.
+`km_report.py`, `verdict.py`, `html_report_helper.py`,
+`laim_monitoring/__init__.py`, `laim_monitoring/core.py`; тест
+`test_descriptor_declares_settings_and_sources` закрепляет настройки и
+`verdict.py` в списке. Нода самодостаточна: контракт лежит в вендорной копии
+`laim_monitoring/` (совпадает с копиями local-drift, oos-oot, assessor).
+Зависимости `requirements.txt`: `pandas`, `matplotlib` (график), `ipython`
+(`IPython.display` в `html_report_helper.py`), `jinja2` (`Styler.to_html` в
+pandas). Проверка: `ruff check .` и `python -m pytest -q` из корня ноды на
+Python 3.12 (так же настроен CI).
 
 ## Глоссарий
 
 - **КМ** — ключевая метрика качества агента; имя и baseline приходят в
   контракте `monitoring_metric`.
-- **Baseline** — КМ первичной валидации: `baseline.value` контракта или `perv_validation_km`.
-- **`main_metric`** — каноническая оценка единицы наблюдения (строки в `qa`
-  и `turn_with_history`, сессии в `dialogue`), выставленная ассессором.
-- **`delta`** — относительное снижение КМ `(baseline - current) / baseline`.
+- **Baseline (КМ_база)** — КМ первичной валидации: `baseline.value` контракта или `perv_validation_km`.
+- **δ (delta)** — допустимое снижение КМ; `km_delta` — точечное снижение в единицах `delta_unit`.
+- **C_MIN** — минимально допустимый уровень КМ (`c_min`).
+- **Единица оценки** — строка в `qa`/`turn_with_history`, сессия в `dialogue`; оценка единицы — `main_metric` ассессора.
+- **Отказ судьи** — единица без оценки (`NaN`), считается в `refused_units`.
+- **Интервал** — 95 % интервал КМ мониторинга; цвет выставляется по его границам.
