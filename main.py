@@ -85,6 +85,7 @@ def main(
                 "c_min": minimum_level,
             },
             "warnings": result["warnings"],
+            "judge_bias": result["judge_bias"],
         },
         "test_description": result["html_plot"],
     }

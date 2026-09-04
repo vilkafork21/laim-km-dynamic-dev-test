@@ -255,6 +255,50 @@ def test_c_min_setting_and_relative_unit():
     assert _run(frame, delta_unit="relative", **kwargs)["km_delta_unit"] == "relative"
 
 
+def _calibrated(status="green", reason="ok", **bias):
+    assessment = _assessment(120, 120)
+    assessment["calibration_metrics"] = {
+        "admission_status": status, "admission_reason": reason, **bias,
+    }
+    return assessment
+
+
+def test_judge_admission_gates_km():
+    frame = _flat_frame(108, 12)
+    refused = _run(frame, assessment_result=_calibrated("red", "судья не лучше моды"))
+    assert refused["status"] == "not_computable"
+    assert refused["reason_code"] == "judge_not_admitted" and "моды" in refused["reason"]
+    pending = _run(frame, assessment_result=_calibrated("not_assessed", "holdout мал"))
+    assert pending["reason_code"] == "judge_not_admitted"
+    limited = _run(frame, assessment_result=_calibrated("amber", "каппа ниже порога"))
+    assert limited["status"] == "computed" and limited["color"] == "green"
+    assert any("жёлтый" in warning for warning in limited["warnings"])
+
+
+def test_judge_bias_shifts_estimate_and_widens_interval():
+    frame = _flat_frame(98, 22)   # 0.8167: без поправки пессимистичное снижение > 0.15
+    plain = _run(frame, assessment_result=_assessment(120, 120))
+    assert plain["color"] == "amber" and plain["judge_bias"] is None
+    corrected = _run(frame, assessment_result=_calibrated(
+        bias_mean=-0.1, bias_ci_lower=-0.12, bias_ci_upper=-0.08, bias_units=40,
+    ))
+    assert corrected["color"] == "green" and corrected["reason_code"] == "within_tolerance"
+    assert corrected["km_monitoring"] == pytest.approx(0.9167, abs=1e-3)
+    assert corrected["interval"]["method"] == "wilson+bias"
+    assert corrected["interval"]["lower"] == pytest.approx(plain["interval"]["lower"] + 0.1 - 0.02)
+    assert corrected["judge_bias"] == {
+        "mean": -0.1, "ci_lower": -0.12, "ci_upper": -0.08, "applied": True,
+    }
+
+
+def test_uncertain_judge_bias_blocks_verdict():
+    verdict = _run(_flat_frame(108, 12), assessment_result=_calibrated(
+        bias_mean=-0.05, bias_ci_lower=-0.4, bias_ci_upper=0.3, bias_units=8,
+    ))
+    assert verdict["status"] == "not_computable"
+    assert verdict["reason_code"] == "judge_bias_uncertain"
+
+
 def test_reconciliation_mismatch_is_warning_not_gate():
     metric = _metric()
     metric["baseline"]["reconciliation"] = "mismatch"
