@@ -388,6 +388,10 @@ def km_dynamics_test(
             ci.lower - bias_mean - half, ci.upper - bias_mean + half, ci.level,
             f"{ci.method}+bias",
         )
+        if all(0.0 <= score <= 1.0 for score in summary["scores"]):
+            # Долевая метрика: сдвиг на смещение не выводит оценку за пределы шкалы.
+            current = min(1.0, max(0.0, current))
+            ci = Interval(max(0.0, ci.lower), min(1.0, ci.upper), ci.level, ci.method)
         judge_bias = {
             "mean": bias_mean,
             "ci_lower": float(calibration["bias_ci_lower"]),
