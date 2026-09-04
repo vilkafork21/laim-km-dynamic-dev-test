@@ -11,22 +11,50 @@
         "components": [
           {
             "type": "form",
-            "label": "Настройка пределов метрики",
+            "label": "Пороги теста 6.3.4",
             "config": {
               "components": [
                 {
                   "parameter": "green_threshold",
-                  "label": "Зелёная зона: относительное снижение КМ не больше",
+                  "label": "Зелёная зона: снижение КМ не больше (в единицах delta_unit)",
                   "uiComponent": "input",
                   "type": "float",
                   "defaultValue": 0.15
                 },
                 {
                   "parameter": "red_threshold",
-                  "label": "Красная зона: относительное снижение КМ не меньше",
+                  "label": "Красная зона: снижение КМ не меньше (в единицах delta_unit)",
                   "uiComponent": "input",
                   "type": "float",
                   "defaultValue": 0.25
+                },
+                {
+                  "parameter": "delta_unit",
+                  "label": "Единицы снижения: absolute (шкала метрики) или relative (доля от базы)",
+                  "uiComponent": "input",
+                  "type": "string",
+                  "defaultValue": "absolute"
+                },
+                {
+                  "parameter": "c_min",
+                  "label": "Минимально допустимый уровень КМ (0 = не задан)",
+                  "uiComponent": "input",
+                  "type": "float",
+                  "defaultValue": 0.0
+                },
+                {
+                  "parameter": "min_valid_units",
+                  "label": "Минимум оценённых единиц для вердикта",
+                  "uiComponent": "input",
+                  "type": "integer",
+                  "defaultValue": 50
+                },
+                {
+                  "parameter": "max_invalid_share",
+                  "label": "Допустимая доля отказов судьи",
+                  "uiComponent": "input",
+                  "type": "float",
+                  "defaultValue": 0.2
                 }
               ]
             }
@@ -141,7 +169,7 @@
       "in": false,
       "type": "default",
       "shape": "shape_model",
-      "description": "Результаты прохождения теста",
+      "description": "Результаты прохождения теста; цвет по границам интервала КМ, reason_code, interval, provenance (единицы, отказы судьи), warnings",
       "order": 7
     },
     {
@@ -165,6 +193,8 @@
       "sourceFiles": [
         "main.py",
         "km_dynamics.py",
+        "km_report.py",
+        "verdict.py",
         "html_report_helper.py",
         "laim_monitoring/__init__.py",
         "laim_monitoring/core.py"
