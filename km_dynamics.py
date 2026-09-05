@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 
@@ -19,8 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def summarize_units(scored_df: pd.DataFrame, contract: dict) -> dict[str, object]:
-    """Единицы оценки по контракту: отказы судьи (NaN main_metric) исключаются из
-    числителя и знаменателя независимо от missing_policy и считаются отдельно."""
+    """Наблюдаемое среднее и границы заполнения отказов в полученном наборе."""
     units = unitize(scored_df, contract, include_sources=False)
     scores = pd.to_numeric(units["main_metric"], errors="coerce")
     weighted = contract["aggregation"]["method"] == "frequency_weighted_mean"
@@ -29,8 +29,8 @@ def summarize_units(scored_df: pd.DataFrame, contract: dict) -> dict[str, object
         if weighted
         else pd.Series(1.0, index=units.index)
     )
-    if weighted and (weights.isna().any() or (weights <= 0).any()):
-        raise MonitoringContractError("input_query_count должен быть положительным числом")
+    if weighted and (not weights.map(math.isfinite).all() or (weights <= 0).any()):
+        raise MonitoringContractError("input_query_count должен быть конечным положительным числом")
     scored = scores.notna()
     values = scores[scored].astype(float).tolist()
     if not scores[scored].isin(contract["evaluation"]["score_values"]).all():
@@ -38,6 +38,16 @@ def summarize_units(scored_df: pd.DataFrame, contract: dict) -> dict[str, object
     used = weights[scored].tolist()
     total = int(len(units))
     refused = int((~scored).sum())
+    scored_weight = math.fsum(used)
+    refused_weight = math.fsum(weights[~scored])
+    total_weight = scored_weight + refused_weight
+    observed_sum = math.fsum(s * w for s, w in zip(values, used))
+    domain = contract["evaluation"]["score_values"]
+    bounds = None if not total_weight else {
+        "lower": (observed_sum + refused_weight * domain[0]) / total_weight,
+        "upper": (observed_sum + refused_weight * domain[-1]) / total_weight,
+        "scope": "received_units",
+    }
     return {
         "scores": values,
         "weights": used,
@@ -47,7 +57,12 @@ def summarize_units(scored_df: pd.DataFrame, contract: dict) -> dict[str, object
             "scored_units": total - refused,
             "refused_units": refused,
             "refused_share": (refused / total) if total else 1.0,
-            "weight_sum": float(sum(used)),
+            "weight_sum": scored_weight,
+            "total_weight": total_weight,
+            "refused_weight": refused_weight,
+            "refused_weight_share": refused_weight / total_weight if total_weight else None,
+            "observed_mean": observed_sum / scored_weight if scored_weight else None,
+            "completion_bounds": bounds,
             "n_effective": effective_n(used) if used else 0.0,
         },
     }
@@ -125,7 +140,6 @@ def km_dynamics_test(
     delta_unit: str = "absolute",
     c_min: float | None = None,
     min_valid_units: int = 50,
-    max_invalid_share: float = 0.2,
 ) -> dict[str, object]:
     if delta_unit not in UNITS:
         raise ValueError(f"delta_unit должен быть одним из {UNITS}, получено {delta_unit!r}")
@@ -198,10 +212,11 @@ def km_dynamics_test(
             "Базовое значение КМ отсутствует или неположительно.",
             "baseline_not_positive", provenance,
         )
-    if provenance["refused_share"] > max_invalid_share:
+    if provenance["refused_units"]:
         return refused(
-            f"Доля отказов судьи {provenance['refused_share']:.2f} выше допустимой "
-            f"{max_invalid_share:.2f}.",
+            f"Нет оценок для {provenance['refused_units']} из {provenance['total_units']} единиц. "
+            "Среднее оценённой части не определяет КМ всего периода; "
+            "границы заполнения полученного набора приведены отдельно.",
             "judge_refusals", provenance,
         )
     if provenance["scored_units"] < min_valid_units:

@@ -48,13 +48,6 @@
                   "uiComponent": "input",
                   "type": "integer",
                   "defaultValue": 50
-                },
-                {
-                  "parameter": "max_invalid_share",
-                  "label": "Допустимая доля отказов судьи",
-                  "uiComponent": "input",
-                  "type": "float",
-                  "defaultValue": 0.2
                 }
               ]
             }

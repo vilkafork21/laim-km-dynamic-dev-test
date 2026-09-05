@@ -29,15 +29,14 @@ def main(
     delta_unit: str = "absolute",
     c_min: float = 0.0,
     min_valid_units: int = 50,
-    max_invalid_share: float = 0.2,
 ):
     # c_min = 0 означает «минимальный уровень не задан»: любое значение метрики
     # с направлением «больше — лучше» не ниже нуля.
     minimum_level = None if c_min <= 0 else float(c_min)
     logger.info(
-        "[km] пороги green<=%s red>=%s unit=%s c_min=%s min_units=%s max_refused=%s",
+        "[km] пороги green<=%s red>=%s unit=%s c_min=%s min_units=%s",
         green_threshold, red_threshold, delta_unit, minimum_level,
-        min_valid_units, max_invalid_share,
+        min_valid_units,
     )
     result = km_dynamics_test(
         acc_auto=acc_auto,
@@ -49,7 +48,6 @@ def main(
         delta_unit=delta_unit,
         c_min=minimum_level,
         min_valid_units=min_valid_units,
-        max_invalid_share=max_invalid_share,
     )
     color = result["trafic_light"]
     platform_color = _PLATFORM_COLOR.get(color, color)

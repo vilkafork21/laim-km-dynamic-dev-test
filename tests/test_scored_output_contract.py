@@ -137,6 +137,9 @@ def test_km_dynamics_accepts_assessor_output_and_contract():
     assert verdict["provenance"] == {
         "unit": "dialogue", "total_units": 3, "scored_units": 3, "refused_units": 0,
         "refused_share": 0.0, "weight_sum": 3.0, "n_effective": 3.0,
+        "total_weight": 3.0, "refused_weight": 0.0, "refused_weight_share": 0.0,
+        "observed_mean": pytest.approx(2 / 3),
+        "completion_bounds": {"lower": pytest.approx(2 / 3), "upper": pytest.approx(2 / 3), "scope": "received_units"},
     }
     assert verdict["coverage"]["total_units"] == 3
     assert verdict["warnings"] == []
@@ -212,25 +215,25 @@ def test_default_minimum_units_blocks_small_sample():
     assert verdict["provenance"]["scored_units"] == 3 and "50" in verdict["reason"]
 
 
-def test_judge_refusals_are_excluded_and_capped():
+def test_judge_refusal_preserves_denominator_and_blocks_period_verdict():
     frame = _scored_df()
     frame.loc[frame["session_id"] == "m3", ["main_metric", "agent_assessment_score"]] = float("nan")
-    tolerant = _run(frame, min_valid_units=2, max_invalid_share=0.5)
-    assert tolerant["status"] == "computed"
-    assert tolerant["provenance"]["refused_units"] == 1
-    assert tolerant["provenance"]["scored_units"] == 2
-    assert tolerant["km_monitoring"] == 1.0
-    capped = _run(frame, min_valid_units=2, max_invalid_share=0.2)
-    assert capped["status"] == "not_computable" and capped["reason_code"] == "judge_refusals"
+    result = _run(frame, min_valid_units=2)
+    assert result["status"] == "not_computable" and result["reason_code"] == "judge_refusals"
+    assert result["provenance"]["refused_units"] == 1
+    assert result["provenance"]["scored_units"] == 2
+    assert result["provenance"]["observed_mean"] == 1.0
+    assert result["km_monitoring"] is None
 
 
 def test_missing_policy_fail_does_not_crash_on_refusal():
-    # Контракт с missing_policy=fail относится к пропускам разметки, а не к
-    # отказам судьи: отказ исключается и считается, нода не падает.
+    # Политика первичной разметки не превращает отказ судьи в плохой ответ агента.
     frame = _scored_df()
     frame.loc[0:1, ["main_metric", "agent_assessment_score"]] = float("nan")
-    verdict = _run(frame, min_valid_units=2, max_invalid_share=0.5)
-    assert verdict["status"] == "computed" and verdict["provenance"]["refused_units"] == 1
+    result = _run(frame, min_valid_units=2)
+    assert result["status"] == "not_computable" and result["provenance"]["refused_units"] == 1
+    assert result["provenance"]["completion_bounds"]["lower"] == pytest.approx(1 / 3)
+    assert result["provenance"]["completion_bounds"]["upper"] == pytest.approx(2 / 3)
 
 
 def test_large_sample_colours_by_interval():
@@ -326,7 +329,7 @@ def test_descriptor_declares_settings_and_sources():
     by_name = {item["parameter"]: item["defaultValue"] for item in settings}
     assert by_name == {
         "green_threshold": 0.15, "red_threshold": 0.25, "delta_unit": "absolute",
-        "c_min": 0.0, "min_valid_units": 50, "max_invalid_share": 0.2,
+        "c_min": 0.0, "min_valid_units": 50,
     }
     assert "verdict.py" in descriptor["script"]["runConfiguration"]["sourceFiles"]
 
