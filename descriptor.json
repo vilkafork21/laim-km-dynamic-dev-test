@@ -109,7 +109,7 @@
       "in": true,
       "type": "default",
       "shape": "shape_model",
-      "description": "Валидированный контракт laim-monitoring-metric.v2",
+      "description": "Валидированный контракт laim-monitoring-metric.v3",
       "required": true,
       "order": 1
     },
@@ -144,33 +144,13 @@
       "order": 4
     },
     {
-      "name": "perv_validation_km",
-      "label": "КМ первичной валидации (необязательный)",
-      "in": true,
-      "type": "default",
-      "shape": "shape_model",
-      "description": "Явное значение КМ первичной валидации {name, value}; если подан — главнее baseline из monitoring_metric",
-      "required": false,
-      "order": 5
-    },
-    {
-      "name": "metric_spec",
-      "label": "MetricSpec ключевой метрики",
-      "in": true,
-      "type": "default",
-      "shape": "shape_model",
-      "description": "Результат kriteria-selector: используется для строгого преобразования assessor-колонок в main_metric",
-      "required": false,
-      "order": 6
-    },
-    {
       "name": "all_results",
       "label": "all_results",
       "in": false,
       "type": "default",
       "shape": "shape_model",
       "description": "Результаты прохождения теста; цвет по границам интервала КМ, reason_code, interval, provenance (единицы, отказы судьи), warnings",
-      "order": 7
+      "order": 5
     },
     {
       "name": "test_description",
@@ -179,7 +159,7 @@
       "type": "hidden",
       "shape": "shape_model",
       "description": "Описание теста",
-      "order": 8
+      "order": 6
     }
   ],
   "script": {
@@ -197,7 +177,8 @@
         "verdict.py",
         "html_report_helper.py",
         "laim_monitoring/__init__.py",
-        "laim_monitoring/core.py"
+        "laim_monitoring/core.py",
+        "measurement.py"
       ],
       "functionName": "main",
       "functionParameters": [],

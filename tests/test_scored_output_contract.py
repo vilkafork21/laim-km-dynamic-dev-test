@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from measurement_fixture import reviewed_metric
+
 import json
 from pathlib import Path
 
@@ -14,7 +16,7 @@ NODE_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _metric() -> dict[str, object]:
-    return {
+    return reviewed_metric({
         "contract_version": "laim-monitoring-metric.v2",
         "umr_version": "laim-umr.v2",
         "status": "computed",
@@ -48,7 +50,7 @@ def _metric() -> dict[str, object]:
             "verdict": None, "affects_monitoring": False,
         },
         "evidence": {},
-    }
+    })
 
 
 def _scored_df() -> pd.DataFrame:
@@ -64,12 +66,14 @@ def _scored_df() -> pd.DataFrame:
         "assessment_unit_id": ["m1", "m1", "m2", "m3"],
         "main_metric": [1.0, 1.0, 1.0, 0.0],
         "agent_assessment_score": [1.0, 1.0, 1.0, 0.0],
-    })
+    }).assign(definition_id=_metric()["definition_id"], dataset_role="monitoring", assessment_run_id="test-run")
 
 
 def _assessment(total=3, scored=3):
     return {
-        "contract_version": "laim-assessment-result.v1",
+        "contract_version": "laim-assessment-result.v2",
+        "purpose": "monitoring", "run_id": "test-run",
+        "definition_id": _metric()["definition_id"],
         "status": "computed",
         "assessment_mode": "dialogue",
         "total_units": total,
@@ -84,9 +88,12 @@ def _run(frame=None, **overrides):
         monitoring_metric=_metric(),
         scored_df=frame if frame is not None else _scored_df(),
         assessment_result=_assessment(),
-        metric_spec={"main_metric": "main_metric", "status": "resolved"},
     )
     kwargs.update(overrides)
+    if "monitoring_metric" in overrides:
+        kwargs["monitoring_metric"] = reviewed_metric(kwargs["monitoring_metric"])
+        kwargs["scored_df"] = kwargs["scored_df"].assign(definition_id=kwargs["monitoring_metric"]["definition_id"])
+        kwargs["assessment_result"]["definition_id"] = kwargs["monitoring_metric"]["definition_id"]
     return main(**kwargs)["all_results"]
 
 
@@ -104,7 +111,7 @@ def _flat_frame(ones: int, zeros: int) -> pd.DataFrame:
         "assessment_unit_id": [f"s{i}" for i in range(rows)],
         "main_metric": scores,
         "agent_assessment_score": scores,
-    })
+    }).assign(definition_id=_metric()["definition_id"], dataset_role="monitoring", assessment_run_id="test-run")
 
 
 def test_km_dynamics_accepts_assessor_output_and_contract():
@@ -113,7 +120,6 @@ def test_km_dynamics_accepts_assessor_output_and_contract():
         monitoring_metric=_metric(),
         scored_df=_scored_df(),
         assessment_result=_assessment(),
-        metric_spec={"main_metric": "main_metric", "status": "resolved"},
         min_valid_units=3,
     )
 
@@ -147,17 +153,14 @@ def test_canonical_main_metric_wins_over_selector_columns():
         monitoring_metric=_metric(),
         scored_df=_scored_df(),
         assessment_result={
-            "contract_version": "laim-assessment-result.v1",
+            "contract_version": "laim-assessment-result.v2",
+        "purpose": "monitoring", "run_id": "test-run",
+        "definition_id": _metric()["definition_id"],
             "status": "computed",
             "assessment_mode": "dialogue",
             "total_units": 3,
             "scored_units": 3,
             "calibration_metrics": {"admission_status": "green"},
-        },
-        metric_spec={
-            "status": "resolved",
-            "main_metric": "итоговая_оценка_metric",  # колонка эталонной корзины
-            "scoring_method": "identity",
         },
         min_valid_units=3,
     )
@@ -309,12 +312,12 @@ def test_uncertain_judge_bias_blocks_verdict():
     assert verdict["reason_code"] == "judge_bias_uncertain"
 
 
-def test_reconciliation_mismatch_is_warning_not_gate():
+def test_reconciliation_mismatch_prevents_admission():
     metric = _metric()
     metric["baseline"]["reconciliation"] = "mismatch"
     verdict = _run(monitoring_metric=metric, min_valid_units=3)
-    assert verdict["status"] == "computed"
-    assert any("reconciliation" in warning for warning in verdict["warnings"])
+    assert verdict["status"] == "not_computable"
+    assert verdict["reason_code"] == "upstream_not_computable"
 
 
 def test_descriptor_declares_settings_and_sources():
@@ -326,3 +329,35 @@ def test_descriptor_declares_settings_and_sources():
         "c_min": 0.0, "min_valid_units": 50, "max_invalid_share": 0.2,
     }
     assert "verdict.py" in descriptor["script"]["runConfiguration"]["sourceFiles"]
+
+
+def test_calibration_is_not_current_monitoring():
+    assessment = _assessment()
+    assessment["purpose"] = "calibration"
+    verdict = _run(assessment_result=assessment, min_valid_units=3)
+    assert verdict["status"] == "not_computable"
+    assert verdict["reason_code"] == "wrong_assessment_purpose"
+
+
+def test_scores_of_another_definition_are_rejected():
+    verdict = _run(_scored_df().assign(definition_id="1" * 64), min_valid_units=3)
+    assert verdict["reason_code"] == "definition_mismatch"
+
+
+def test_reference_rows_cannot_be_used_as_monitoring():
+    verdict = _run(_scored_df().assign(dataset_role="reference"), min_valid_units=3)
+    assert verdict["reason_code"] == "wrong_dataset_role"
+
+
+def test_judge_admission_from_another_run_is_rejected():
+    assessment = _assessment()
+    assessment["run_id"] = "another-run"
+    verdict = _run(assessment_result=assessment, min_valid_units=3)
+    assert verdict["reason_code"] == "assessment_run_mismatch"
+
+
+def test_result_preserves_measurement_and_assessment_run():
+    result = _run(min_valid_units=3)
+    assert result["status"] == "computed"
+    assert result["definition_id"] == _metric()["definition_id"]
+    assert result["run_id"] == "test-run"
