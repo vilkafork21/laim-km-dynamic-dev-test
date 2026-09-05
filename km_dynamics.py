@@ -308,12 +308,15 @@ def km_dynamics_test(
         if not isinstance(reason, str) or not reason.strip():
             reason = f"assessment_status={assessment_result.get('status')!r}"
         return refused(reason, "assessment_not_computable")
-    calibration = (assessment_result or {}).get("calibration_metrics") or {}
+    calibration = (assessment_result or {}).get("calibration_metrics")
+    if not isinstance(calibration, dict):
+        return refused("Нет результата калибровки автоассессора (6.3.3)", "judge_not_admitted")
     admission = calibration.get("admission_status")
     warnings: list[str] = []
-    if admission in {"red", "not_assessed"}:
+    if admission not in ("green", "amber"):
         return refused(
-            f"автоассессор не допущен (6.3.3): {calibration.get('admission_reason')}",
+            f"автоассессор не допущен (6.3.3), admission_status={admission!r}: "
+            f"{calibration.get('admission_reason') or 'допуск не подтверждён'}",
             "judge_not_admitted",
         )
     if admission == "amber":

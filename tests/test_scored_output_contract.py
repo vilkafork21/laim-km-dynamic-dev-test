@@ -74,6 +74,7 @@ def _assessment(total=3, scored=3):
         "assessment_mode": "dialogue",
         "total_units": total,
         "scored_units": scored,
+        "calibration_metrics": {"admission_status": "green", "admission_reason": "Тестовый допуск"},
     }
 
 
@@ -151,6 +152,7 @@ def test_canonical_main_metric_wins_over_selector_columns():
             "assessment_mode": "dialogue",
             "total_units": 3,
             "scored_units": 3,
+            "calibration_metrics": {"admission_status": "green"},
         },
         metric_spec={
             "status": "resolved",
