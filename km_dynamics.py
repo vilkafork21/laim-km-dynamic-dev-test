@@ -13,8 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from km_report import report_html
 from laim_monitoring import MonitoringContractError, unitize, validate_monitoring_metric
-from verdict import UNITS, Interval, drop, effective_n, interval
-from verdict import verdict as decide_color
+from verdict import UNITS, effective_n
 
 logger = logging.getLogger(__name__)
 
@@ -175,18 +174,12 @@ def km_dynamics_test(
     if not isinstance(calibration, dict):
         return refused("Нет результата калибровки автоассессора (6.3.3)", "judge_not_admitted")
     admission = calibration.get("admission_status")
-    warnings: list[str] = []
     if admission not in ("green", "amber"):
         return refused(
             f"автоассессор не допущен (6.3.3), admission_status={admission!r}: "
             f"{calibration.get('admission_reason') or 'допуск не подтверждён'}",
             "judge_not_admitted",
         )
-    if admission == "amber":
-        warnings.append(
-            f"допуск автоассессора жёлтый: {calibration.get('admission_reason')}"
-        )
-
     if not isinstance(scored_df, pd.DataFrame) or "main_metric" not in scored_df:
         return refused("scored_df не содержит итоговый main_metric ассесора", "missing_final_score")
     if assessment_result.get("purpose") != "monitoring":
@@ -225,82 +218,9 @@ def km_dynamics_test(
             "insufficient_units", provenance,
         )
 
-    ci = interval(summary["scores"], summary["weights"])
-    current = sum(s * w for s, w in zip(summary["scores"], summary["weights"])) / sum(
-        summary["weights"]
+    return refused(
+        "Калибровка на первичной корзине не определяет человеческую КМ отчётного периода. "
+        "Нет подтверждённого состава периода, дизайна контрольной разметки и оценки ошибки "
+        "судьи на этом потоке. Среднее оценок судьи и границы полученного набора — только диагностика.",
+        "period_estimate_unidentified", provenance,
     )
-    judge_bias = None
-    if calibration.get("bias_mean") is not None:
-        # Поправка на смещение судьи (карточка 6.3.4, шаги 8/10/12): КМ_тек − b,
-        # интервал расширяется на неопределённость самого смещения.
-        bias_mean = float(calibration["bias_mean"])
-        half = (
-            float(calibration["bias_ci_upper"]) - float(calibration["bias_ci_lower"])
-        ) / 2
-        tolerance = green_threshold if delta_unit == "absolute" else green_threshold * baseline
-        if half > tolerance:
-            return refused(
-                f"интервал смещения судьи ±{half:.3f} шире допустимого снижения КМ "
-                f"{tolerance:.3f}: ошибка измерителя способна изменить цвет",
-                "judge_bias_uncertain", provenance,
-            )
-        current -= bias_mean
-        ci = Interval(
-            ci.lower - bias_mean - half, ci.upper - bias_mean + half, ci.level,
-            f"{ci.method}+bias",
-        )
-        if contract["baseline"]["scale"] == "ratio":
-            # Долевая метрика: сдвиг на смещение не выводит оценку за пределы шкалы.
-            current = min(1.0, max(0.0, current))
-            ci = Interval(max(0.0, ci.lower), min(1.0, ci.upper), ci.level, ci.method)
-        judge_bias = {
-            "mean": bias_mean,
-            "ci_lower": float(calibration["bias_ci_lower"]),
-            "ci_upper": float(calibration["bias_ci_upper"]),
-            "applied": True,
-        }
-    decision = decide_color(
-        baseline, ci, green_threshold=green_threshold, red_threshold=red_threshold,
-        unit=delta_unit, c_min=c_min,
-    )
-    delta = drop(baseline, current, delta_unit)
-
-    logger.info(
-        "[km] baseline=%s current=%s interval=[%s; %s] drop=%s unit=%s color=%s units=%s",
-        baseline, current, ci.lower, ci.upper, delta, delta_unit, decision.color, provenance,
-    )
-    metric_details = {
-        "name": contract["name"],
-        "КМ на мониторинге": current,
-        "КМ на первичной валидации": baseline,
-        "Дельта КМ": delta,
-        "Порог минимальной дельты КМ": red_threshold,
-        "coverage": _coverage(provenance),
-    }
-    return {
-        "status": "computed",
-        "trafic_light": decision.color,
-        "reason": decision.reason,
-        "reason_code": decision.reason_code,
-        "kluch_metric": metric_details,
-        "interval": {
-            "lower": ci.lower, "upper": ci.upper, "level": ci.level, "method": ci.method,
-        },
-        "provenance": provenance,
-        "warnings": warnings,
-        "delta_unit": delta_unit,
-        "judge_bias": judge_bias,
-        "html_plot": report_html(
-            contract["name"],
-            baseline,
-            current,
-            delta,
-            acc_auto,
-            decision.color,
-            reason=decision.reason,
-            assessment_mode=contract["assessment_mode"],
-            thresholds=thresholds,
-            interval_=ci,
-            provenance=provenance,
-        ),
-    }

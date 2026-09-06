@@ -126,14 +126,14 @@ def test_km_dynamics_accepts_assessor_output_and_contract():
     verdict = result["all_results"]
     assert verdict["test_name"] == "km_test"
     assert verdict["color"] in {"green", "amber", "red", "gray"}
-    assert verdict["status"] == "computed"
+    assert verdict["status"] == "not_computable"
     assert verdict["km_name"] == "Accuracy"
     assert verdict["km_baseline"] == 0.92
-    assert verdict["km_monitoring"] == pytest.approx(2 / 3)
-    assert verdict["km_delta"] == pytest.approx(0.92 - 2 / 3)
+    assert verdict["km_monitoring"] is None
+    assert verdict["km_delta"] is None
     assert verdict["km_delta_unit"] == "absolute"
-    assert verdict["interval"]["method"] == "wilson"
-    assert verdict["interval"]["lower"] < 2 / 3 < verdict["interval"]["upper"]
+    assert verdict["interval"] is None
+    assert verdict["reason_code"] == "period_estimate_unidentified"
     assert verdict["provenance"] == {
         "unit": "dialogue", "total_units": 3, "scored_units": 3, "refused_units": 0,
         "refused_share": 0.0, "weight_sum": 3.0, "n_effective": 3.0,
@@ -169,7 +169,7 @@ def test_canonical_main_metric_wins_over_selector_columns():
     )
 
     verdict = result["all_results"]
-    assert verdict["status"] == "computed", verdict["reason"]
+    assert verdict["status"] == "not_computable", verdict["reason"]
 
 
 def test_zero_baseline_is_not_computable_not_green():
@@ -198,13 +198,12 @@ def test_optional_ports_can_be_absent():
 
 
 def test_thresholds_are_node_settings():
-    # Пороги, единицы и C_MIN — настройки ноды и публикуются в выходе. На трёх
-    # единицах интервал широк: снижение возможно, но не подтверждено — жёлтый.
+    # Настройки сохраняются в отчёте, но не разрешают неподтверждённый вывод о периоде.
     default = _run(min_valid_units=3)
     strict = _run(min_valid_units=3, green_threshold=0.05, red_threshold=0.2, delta_unit="relative")
-    assert default["color"] == "amber"
+    assert default["color"] == "gray"
     assert default["thresholds"] == {"green": 0.15, "red": 0.25, "unit": "absolute", "c_min": None}
-    assert strict["color"] == "amber" and strict["km_delta_unit"] == "relative"
+    assert strict["color"] == "gray" and strict["km_delta_unit"] == "relative"
     assert strict["thresholds"] == {"green": 0.05, "red": 0.2, "unit": "relative", "c_min": None}
 
 
@@ -236,31 +235,25 @@ def test_missing_policy_fail_does_not_crash_on_refusal():
     assert result["provenance"]["completion_bounds"]["upper"] == pytest.approx(2 / 3)
 
 
-def test_large_sample_colours_by_interval():
-    green = _run(_flat_frame(108, 12), assessment_result=_assessment(120, 120))
-    assert green["status"] == "computed" and green["km_monitoring"] == pytest.approx(0.9)
-    assert green["interval"]["lower"] < 0.9 < green["interval"]["upper"]
-    # 0.92 -> 0.9: пессимистичное снижение около 0.09 <= 0.15
-    assert green["color"] == "green" and green["reason_code"] == "within_tolerance"
-    amber = _run(_flat_frame(72, 48), assessment_result=_assessment(120, 120))
-    # 0.92 -> 0.6: оптимистичная граница около 0.687 даёт снижение 0.23 < 0.25
-    assert amber["color"] == "amber" and amber["reason_code"] == "drop_possible"
-    red = _run(_flat_frame(60, 60), assessment_result=_assessment(120, 120))
-    # 0.92 -> 0.5: оптимистичная граница около 0.589 даёт снижение 0.33 >= 0.25
-    assert red["color"] == "red" and red["reason_code"] == "drop_confirmed"
+def test_more_proxy_scores_do_not_identify_human_period_quality():
+    for ones in (108, 72, 60):
+        result = _run(_flat_frame(ones, 120 - ones), assessment_result=_assessment(120, 120))
+        assert result["status"] == "not_computable"
+        assert result["km_monitoring"] is result["interval"] is None
+        assert result["provenance"]["observed_mean"] == pytest.approx(ones / 120)
+        assert result["provenance"]["completion_bounds"] == {
+            "lower": ones / 120, "upper": ones / 120, "scope": "received_units",
+        }
 
 
-def test_c_min_setting_and_relative_unit():
+def test_threshold_settings_cannot_authorize_proxy_estimate():
     frame = _flat_frame(88, 12)
-    kwargs = dict(assessment_result=_assessment(100, 100))
-    # Уилсон для 88/100: интервал около [0.80; 0.93]; пессимистичное снижение 0.12 <= 0.15
-    assert _run(frame, **kwargs)["color"] == "green"
-    # тот же интервал пересекает C_MIN = 0.9
-    crossing = _run(frame, c_min=0.9, **kwargs)
-    assert crossing["color"] == "amber" and crossing["reason_code"] == "drop_possible"
-    below = _run(frame, c_min=0.95, **kwargs)
-    assert below["color"] == "red" and below["reason_code"] == "below_c_min"
-    assert _run(frame, delta_unit="relative", **kwargs)["km_delta_unit"] == "relative"
+    for c_min in (0., .9, .95):
+        result = _run(frame, c_min=c_min, assessment_result=_assessment(100, 100))
+        assert result["color"] == "gray" and result["reason_code"] == "period_estimate_unidentified"
+        assert result["provenance"]["observed_mean"] == .88
+        assert result["thresholds"]["c_min"] == (c_min or None)
+    assert _run(frame, delta_unit="relative", assessment_result=_assessment(100, 100))["km_delta_unit"] == "relative"
 
 
 def _calibrated(status="green", reason="ok", **bias):
@@ -279,32 +272,30 @@ def test_judge_admission_gates_km():
     pending = _run(frame, assessment_result=_calibrated("not_assessed", "holdout мал"))
     assert pending["reason_code"] == "judge_not_admitted"
     limited = _run(frame, assessment_result=_calibrated("amber", "каппа ниже порога"))
-    assert limited["status"] == "computed" and limited["color"] == "green"
-    assert any("жёлтый" in warning for warning in limited["warnings"])
+    assert limited["status"] == "not_computable" and limited["color"] == "gray"
+    assert limited["reason_code"] == "period_estimate_unidentified"
 
 
-def test_judge_bias_shifts_estimate_and_widens_interval():
-    frame = _flat_frame(98, 22)   # 0.8167: без поправки пессимистичное снижение > 0.15
+def test_reference_bias_is_never_applied_to_period():
+    frame = _flat_frame(98, 22)
     plain = _run(frame, assessment_result=_assessment(120, 120))
-    assert plain["color"] == "amber" and plain["judge_bias"] is None
     corrected = _run(frame, assessment_result=_calibrated(
-        bias_mean=-0.1, bias_ci_lower=-0.12, bias_ci_upper=-0.08, bias_units=40,
+        bias_mean=-.1, bias_ci_lower=-.12, bias_ci_upper=-.08, bias_units=40,
     ))
-    assert corrected["color"] == "green" and corrected["reason_code"] == "within_tolerance"
-    assert corrected["km_monitoring"] == pytest.approx(0.9167, abs=1e-3)
-    assert corrected["interval"]["method"] == "wilson+bias"
-    assert corrected["interval"]["lower"] == pytest.approx(plain["interval"]["lower"] + 0.1 - 0.02)
-    assert corrected["judge_bias"] == {
-        "mean": -0.1, "ci_lower": -0.12, "ci_upper": -0.08, "applied": True,
-    }
+    for result in (plain, corrected):
+        assert result["color"] == "gray" and result["reason_code"] == "period_estimate_unidentified"
+        assert result["km_monitoring"] is result["interval"] is result["judge_bias"] is None
+        assert result["provenance"]["observed_mean"] == pytest.approx(98 / 120)
+    assert plain["provenance"] == corrected["provenance"]
 
 
-def test_bias_corrected_interval_stays_in_metric_domain():
-    verdict = _run(_flat_frame(114, 6), assessment_result=_calibrated(
-        bias_mean=-0.1, bias_ci_lower=-0.12, bias_ci_upper=-0.08, bias_units=40,
+def test_bias_cannot_clip_false_quality_to_perfect_score():
+    result = _run(_flat_frame(114, 6), assessment_result=_calibrated(
+        bias_mean=-.1, bias_ci_lower=-.12, bias_ci_upper=-.08, bias_units=40,
     ))
-    assert verdict["status"] == "computed"
-    assert verdict["km_monitoring"] <= 1.0 and verdict["interval"]["upper"] == 1.0
+    assert result["status"] == "not_computable"
+    assert result["km_monitoring"] is result["interval"] is None
+    assert result["provenance"]["observed_mean"] == .95
 
 
 def test_uncertain_judge_bias_blocks_verdict():
@@ -312,7 +303,7 @@ def test_uncertain_judge_bias_blocks_verdict():
         bias_mean=-0.05, bias_ci_lower=-0.4, bias_ci_upper=0.3, bias_units=8,
     ))
     assert verdict["status"] == "not_computable"
-    assert verdict["reason_code"] == "judge_bias_uncertain"
+    assert verdict["reason_code"] == "period_estimate_unidentified"
 
 
 def test_reconciliation_mismatch_prevents_admission():
@@ -361,6 +352,24 @@ def test_judge_admission_from_another_run_is_rejected():
 
 def test_result_preserves_measurement_and_assessment_run():
     result = _run(min_valid_units=3)
-    assert result["status"] == "computed"
+    assert result["status"] == "not_computable"
     assert result["definition_id"] == _metric()["definition_id"]
     assert result["run_id"] == "test-run"
+
+
+@pytest.mark.parametrize('bias', [None, 0.0, -0.106])
+def test_reference_calibration_cannot_identify_period_quality(bias):
+    frame = _flat_frame(6880, 3120)
+    frame['input_query'] = [f'запрос {i}' for i in range(len(frame))]
+    assessment = _assessment(10000, 10000)
+    if bias is not None:
+        assessment['calibration_metrics'].update(
+            bias_mean=bias, bias_ci_lower=bias - .00781, bias_ci_upper=bias + .00781,
+        )
+    result = _run(frame, assessment_result=assessment)
+    assert result['status'] == 'not_computable'
+    assert result['reason_code'] == 'period_estimate_unidentified'
+    assert result['km_monitoring'] is result['km_delta'] is result['interval'] is None
+    assert result['judge_bias'] is None
+    assert result['provenance']['observed_mean'] == pytest.approx(.688)
+    assert result['provenance']['total_units'] == 10000

@@ -44,7 +44,12 @@ def test_nonrandom_refusals_cannot_turn_red_population_green():
     frame["main_metric"] = frame["main_metric"].fillna(0)
     assessment["scored_units"] = 1000
     oracle = main(metric, 1.0, frame, assessment)["all_results"]
-    assert oracle["color"] == "red" and oracle["km_monitoring"] == pytest.approx(0.72)
+    assert oracle["color"] == "gray" and oracle["km_monitoring"] is None
+    assert oracle["reason_code"] == "period_estimate_unidentified"
+    assert oracle["provenance"]["observed_mean"] == pytest.approx(.72)
+    assert oracle["provenance"]["completion_bounds"] == {
+        "lower": .72, "upper": .72, "scope": "received_units",
+    }
 
 
 def test_missing_weight_is_not_replaced_by_missing_unit_share():
