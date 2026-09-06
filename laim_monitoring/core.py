@@ -383,26 +383,28 @@ def _unpack_dialogue_tdc(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def normalize_tdc_monitoring(frame: pd.DataFrame, contract: dict) -> pd.DataFrame:
-    """Канонизировать выход TDC: строгость — к контракту метрики, к данным —
-    коэрсия и достройка (транспорт между портами меняет типы и теряет колонки)."""
+def normalize_umr(frame: pd.DataFrame, contract: dict) -> pd.DataFrame:
+    """Канонизировать UMR в формате тестового датасета (reference из корзины или
+    monitoring из TDC) к плоской форме с reference_group_id/turn_index: строгость —
+    к контракту метрики, к данным — коэрсия и достройка (транспорт между портами
+    меняет типы и теряет колонки)."""
     if not isinstance(frame, pd.DataFrame):
-        raise MonitoringContractError("Monitoring-вход TDC должен быть pandas.DataFrame")
+        raise MonitoringContractError("UMR должен быть pandas.DataFrame")
     if frame.empty:
-        raise MonitoringContractError("Monitoring-вход TDC пуст")
+        raise MonitoringContractError("UMR пуст")
 
     mode = _require(contract, "assessment_mode", _ASSESSMENT_MODES)
     flat_columns = ("query_id", "input_query", "output_answer")
     if all(name in frame for name in flat_columns):
         if "dialogue" in frame:
             raise MonitoringContractError(
-                "Выход TDC смешан: плоские колонки и dialogue одновременно; "
+                "UMR смешан: плоские колонки и dialogue одновременно; "
                 "транспорт обязан быть либо flat, либо packed"
             )
         result = frame.copy()
         if any(_blank(value) for value in result["query_id"]):
             raise MonitoringContractError(
-                "Плоский выход TDC содержит пустой query_id: NA/NaT/пустые "
+                "Плоский UMR содержит пустой query_id: NA/NaT/пустые "
                 "идентификаторы не материализуются текстом"
             )
     elif "dialogue" in frame:
@@ -410,7 +412,7 @@ def normalize_tdc_monitoring(frame: pd.DataFrame, contract: dict) -> pd.DataFram
     else:
         missing = [name for name in flat_columns if name not in frame]
         raise MonitoringContractError(
-            f"Выход TDC не соответствует ни packed dialogue, ни плоской форме: "
+            f"UMR не соответствует ни packed dialogue, ни плоской форме: "
             f"плоская форма неполна, нет колонок {missing}"
         )
     if mode == "qa":
@@ -421,12 +423,12 @@ def normalize_tdc_monitoring(frame: pd.DataFrame, contract: dict) -> pd.DataFram
         # порядок строк сам по себе хронологию не доказывает.
         if "session_id" not in result:
             raise MonitoringContractError(
-                "Контекстный плоский выход TDC требует session_id либо явные "
+                "Контекстный плоский UMR требует session_id либо явные "
                 "reference_group_id + turn_index"
             )
         if any(_blank(value) for value in result["session_id"]):
             raise MonitoringContractError(
-                "Контекстный плоский выход TDC содержит пустой session_id"
+                "Контекстный плоский UMR содержит пустой session_id"
             )
         result["reference_group_id"] = result["session_id"]
     group_column: list[object] = [None] * len(result)
@@ -508,13 +510,8 @@ def _turn_record(
 
 
 def _unitize(frame: pd.DataFrame, contract: dict) -> pd.DataFrame:
-    if not isinstance(frame, pd.DataFrame):
-        raise MonitoringContractError("Вход должен быть pandas.DataFrame")
-    missing = [name for name in ("query_id", "input_query", "output_answer") if name not in frame]
-    if missing:
-        raise MonitoringContractError(f"UMR не содержит канонические колонки: {missing}")
+    frame = normalize_umr(frame, contract)
     query_label = _unique_labels()
-    frame = frame.copy()
     frame["query_id"] = [
         query_label(value, f"row-{position}")
         for position, value in enumerate(frame["query_id"].tolist())
@@ -616,6 +613,32 @@ def _missing(policy: str, reason: str) -> Decimal | None:
     return Decimal(0)
 
 
+def _present_values(
+    values: list[object], policy: str, reason: str
+) -> list[Decimal] | None:
+    """Применить missing_policy к значениям единицы: None означает «единица не оценивается»."""
+    if policy == "exclude_value":
+        values = [value for value in values if value is not None]
+        return values or None
+    if any(value is None for value in values):
+        replacement = _missing(policy, reason)
+        if replacement is None:
+            return None
+        values = [replacement if value is None else value for value in values]
+    return values
+
+
+def _min_binary(values: list[Decimal], method: str) -> Decimal:
+    if any(value not in {Decimal(0), Decimal(1)} for value in values):
+        raise MonitoringContractError(f"{method} требует 0/1")
+    return min(values)
+
+
+def _unanimous(votes: list[object], policy: str, reason: str) -> Decimal | None:
+    values = _present_values(votes, policy, reason)
+    return None if values is None else _min_binary(values, "all_assessors")
+
+
 def _score_row(row, contract: dict) -> Decimal | None:
     scoring = contract["scoring"]
     by_role: dict[str, list[object]] = {}
@@ -634,35 +657,16 @@ def _score_row(row, contract: dict) -> Decimal | None:
             return _missing(policy, "Отсутствует prediction или target")
         return Decimal(int(prediction == target))
     if method in {"mean_criteria", "all_criteria"}:
-        values = by_role["criterion"]
-        if policy == "exclude_value":
-            values = [value for value in values if value is not None]
-            if not values:
-                return None
-        if any(value is None for value in values):
-            replacement = _missing(policy, "Отсутствует criterion score")
-            if replacement is None:
-                return None
-            values = [replacement if value is None else value for value in values]
+        values = _present_values(by_role["criterion"], policy, "Отсутствует criterion score")
+        if values is None:
+            return None
         if method == "mean_criteria":
             return sum(values, Decimal(0)) / len(values)
-        if any(value not in {Decimal(0), Decimal(1)} for value in values):
-            raise MonitoringContractError("all_criteria требует 0/1")
-        return min(values)
+        return _min_binary(values, "all_criteria")
     votes = by_role["assessor_vote"]
     if method == "all_assessors":
-        if policy == "exclude_value":
-            votes = [vote for vote in votes if vote is not None]
-            if not votes:
-                return None
-        if any(vote is None for vote in votes):
-            replacement = _missing(policy, "Отсутствует голос assessor")
-            if replacement is None:
-                return None
-            votes = [replacement if vote is None else vote for vote in votes]
-        if any(vote not in {Decimal(0), Decimal(1)} for vote in votes):
-            raise MonitoringContractError("all_assessors требует 0/1")
-        return min(votes)
+        # Единогласие: та же политика пропусков, что у all_criteria, но по голосам.
+        return _unanimous(votes, policy, "Отсутствует голос assessor")
     present = [vote for vote in votes if vote is not None]
     if any(vote not in {Decimal(0), Decimal(1)} for vote in present):
         raise MonitoringContractError("majority требует 0/1")
@@ -764,8 +768,8 @@ def prepare_drift_frames(
             "Drift не вычисляется: monitoring_metric не содержит assessment_mode "
             f"(status={contract.get('status')!r}, reason={contract.get('reason')!r})"
         )
+    # normalize_umr выполнит _unitize внутри _drift_frame — второй проход не нужен
     monitoring_umr = _load_tdc_monitoring(monitoring_umr)
-    monitoring_umr = normalize_tdc_monitoring(monitoring_umr, contract)
     return (
         _drift_frame(reference_umr, contract, require_target=True),
         _drift_frame(monitoring_umr, contract, require_target=False),

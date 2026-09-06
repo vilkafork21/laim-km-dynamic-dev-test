@@ -1,87 +1,78 @@
 # Тест динамики ключевой метрики (KM Dynamics Test)
 
-LAIM-компонент для оценки изменения качества модели между валидацией и мониторингом.
+LAIM-нода Sber DS: сравнивает ключевую метрику (КМ) агента на мониторинге со
+значением первичной валидации и выставляет светофор.
 
-## Назначение
+## Контракт
 
-Тест вычисляет ключевую метрику (КМ) на данных мониторинга и сравнивает её со значением на валидации. Результат определяется цветом светофора:
+Нода не знает формулу КМ. Формула приходит контрактом `monitoring_metric`
+(`laim-monitoring-metric.v2`) от `laim-baskets-adapter` и исполняется общим
+пакетом `laim_monitoring` — тем же кодом, которым ассесор считает построчный
+`main_metric`. Нода только агрегирует `main_metric` по правилам контракта
+(единица оценки `assessment_mode`, reducer `mean`/`frequency_weighted_mean`,
+`missing_policy`) и сравнивает с `baseline.value`.
 
-| Цвет | Условие |
+| Вход | Что это |
 |------|---------|
-| 🟢 Зелёный | Снижение КМ менее 15 п.п. |
-| 🟡 Жёлтый | Снижение КМ от 15 до 25 п.п. |
-| 🔴 Красный | Снижение КМ более 25 п.п. |
-| ⚫ Серый | Недостаточно данных |
+| `monitoring_metric` | контракт: метод score, источники, агрегация, baseline и статус его сверки с отчётом о валидации |
+| `scored_df` | monitoring UMR с колонкой `main_metric` от ассесора |
+| `acc_auto` | точность ассесора на holdout эталонной корзины, только для отчёта |
+| `assessment_result` | машинный статус ассесора; `not_computable` → серый |
+| `perv_validation_km` | необязательный явный override baseline |
+| `metric_spec` | необязательная ветка kriteria-selector для сборки `main_metric` из колонок |
+
+## Когда тест серый
+
+Светофор считается только по сопоставимым числам. Серый выставляется, если:
+
+- контракт `not_computable` (адаптер не построил план или baseline);
+- `baseline.reconciliation != "match"`: адаптер не воспроизвёл значение отчёта
+  на корзине, значит baseline и КМ мониторинга посчитаны разными формулами;
+- ассесор вернул `assessment_result.status != "computed"`;
+- в `scored_df` нет `main_metric`;
+- baseline равен нулю (относительная дельта не определена).
+
+## Пороги
+
+| Цвет | Относительное снижение `(baseline - monitoring) / baseline` |
+|------|---------|
+| 🟢 | не более 15% |
+| 🟡 | от 15% до 25% |
+| 🔴 | 25% и более |
 
 ## Использование
 
 ```python
-from main import main as apply_tests
-import pandas as pd
+from main import main
 
-scored_df = pd.DataFrame({
-    'target': [1, 0, 1, 1, 0],
-    'question': ['q1', 'q2', 'q3', 'q4', 'q5'],
-    'answer': ['a1', 'a2', 'a3', 'a4', 'a5']
-})
-
-result = apply_tests(
-    acc_auto=0.85,
-    metric_selector_res={'main_metric': 'target'},
-    perv_validation_km={'name': 'Доля успешных диалогов', 'value': 0.75},
-    scored_df=scored_df
+result = main(
+    acc_auto=0.9,
+    monitoring_metric=monitoring_metric,   # контракт от laim-baskets-adapter
+    scored_df=scored_df,                   # UMR с main_metric от ассесора
+    assessment_result=assessment_result,
 )
-
-print(result['all_results']['color'])  # 'green', 'yellow', 'red', 'gray'
+result["all_results"]["color"]         # green / amber / red / gray
+result["all_results"]["km_baseline"]
+result["all_results"]["km_monitoring"]
 ```
 
-## Структура проекта
+## Структура
 
 ```
-.
-├── main.py                     # Точка входа, генерация HTML-отчёта
-├── utils.py                    # Вспомогательные утилиты
-├── descriptor.json             # Конфигурация LAIM-компонента
-├── requirements.txt            # Зависимости
-├── tests/
-│   └── km_dynamics.py          # Логика теста КМ
-└── test_example/
-    ├── report_helper.py        # Расчёт светофоров
-    └── html_report_helper.py   # HTML-компоненты отчёта
+main.py                     # Sber DS entrypoint: светофор, all_results, HTML
+km_dynamics.py              # расчёт динамики: контрактная агрегация + отчёт
+laim_monitoring/core.py     # общий контракт (та же копия, что у ассесора)
+laim_monitoring/canonicalizer.py
+html_report_helper.py       # HTML-компоненты отчёта
+tests/test_km_dynamics.py   # round-trip baseline, матрица светофора, серые случаи
 ```
 
-## Модули
+## Тесты
 
-### main.py
-Модуль генерации HTML-отчёта и запуска теста. Содержит функции для формирования визуального отчёта о тесте, включая таблицы с критериями, результатами и графиками динамики КМ.
-
-### tests/km_dynamics.py
-Тест на динамику ключевой метрики. Содержит функции для расчёта ключевой метрики из размеченных данных, вычисления дельты между валидацией и мониторингом, определения цвета светофора и генерации визуализации.
-
-### test_example/report_helper.py
-Утилиты для расчёта светофоров. Содержит различные функции для определения цвета светофора на основе пороговых значений, частот, квантилей и других метрик.
-
-### test_example/html_report_helper.py
-Вспомогательные функции для генерации HTML-отчётов. Содержит функции для отображения светофоров в HTML, формирования таблиц с критериями и отображения DataFrame с светофорами.
-
-### utils.py
-Вспомогательные утилиты общего назначения. Содержит функции для преобразования типов данных и другие общие операции.
-
-## Зависимости
-
-- pandas
-- matplotlib
-- ipython
-- jinja2
-
-## Пороги светофора
-
-Дельта вычисляется как отношение разницы КМ к значению КМ на валидации:
-```
-delta = (KM_validation - KM_monitoring) / KM_validation
+```bash
+python3 -m pytest -q tests
 ```
 
-- `green_threshold`: 0.15 (15 п.п.)
-- `c_min_threshold`: 0.25 (25 п.п.)
-
-Значения можно переопределить при вызове `km_dynamics_test()`.
+Ключевое свойство, которое проверяют тесты: baseline из контракта
+воспроизводится агрегацией эталонной корзины через `laim_monitoring`. Если
+формула в `core.py` разойдётся с адаптером, тест round-trip упадёт.

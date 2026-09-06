@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-from copy import deepcopy
 import html
 import json
 import io
@@ -16,32 +15,6 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from laim_monitoring import aggregate_main_metric, validate_monitoring_metric
-
-
-def _km_compatible_metric(payload: object) -> object:
-    """Агрегирует готовый all_assessors score без повторной оценки голосов."""
-    if not isinstance(payload, dict):
-        return payload
-    scoring = payload.get("scoring")
-    if not isinstance(scoring, dict) or scoring.get("method") != "all_assessors":
-        return payload
-
-    mapped = deepcopy(payload)
-    mapped["scoring"] = {
-        "method": "identity",
-        "sources": [
-            {
-                "source_id": "source_1",
-                "column_name": mapped.get("score_column"),
-                "role": "final_score",
-                "normalization": "numeric",
-                "polarity": "direct",
-            }
-        ],
-        "missing_policy": scoring.get("missing_policy"),
-        "majority_denominator": None,
-    }
-    return mapped
 
 
 def compute_cluch_metrics(
@@ -192,6 +165,11 @@ _TABLE_STYLES = [
 ]
 
 _WIDGET_COLOR = {"yellow": "yellow", "gray": "grey"}
+_RECONCILIATION_LABEL = {
+    "match": "совпадает (план воспроизводит отчёт)",
+    "mismatch": "РАСХОДИТСЯ (baseline несопоставим с мониторингом)",
+    "not_applicable": "нет заявленного значения в отчёте",
+}
 
 
 def plot_km_dynamics(
@@ -297,6 +275,7 @@ def _report_html(
     coverage: dict[str, object],
     green_threshold: float = 0.15,
     c_min_threshold: float = 0.25,
+    reconciliation: str | None = None,
 ) -> str:
     display_semaphore, show_criteria_semaphore = _helpers()
     criteria = show_criteria_semaphore(
@@ -320,6 +299,7 @@ def _report_html(
         {
             "Показатель": [
                 "Метрика",
+                "Сверка baseline с отчётом о валидации",
                 "Значение КМ на валидации",
                 "Значение КМ на мониторинге",
                 "Относительное снижение",
@@ -331,6 +311,7 @@ def _report_html(
             ],
             "Значение": [
                 html.escape("не определена" if name is None else str(name)),
+                html.escape(_RECONCILIATION_LABEL.get(reconciliation, str(reconciliation or "не выполнена"))),
                 "не определено" if baseline is None else f"{baseline:.6g}",
                 "не определено" if current is None else f"{current:.6g}",
                 "не определено" if delta is None else f"{delta:.1%}",
@@ -417,8 +398,17 @@ def _not_computable_result(
             reason=reason,
             assessment_mode=contract.get("assessment_mode"),
             coverage=metric_details["coverage"],
+            reconciliation=_baseline_reconciliation(contract),
         ),
     }
+
+
+def _baseline_reconciliation(contract: dict) -> str | None:
+    baseline = contract.get("baseline")
+    if not isinstance(baseline, dict):
+        return None
+    status = baseline.get("reconciliation")
+    return None if status is None else str(status)
 
 
 def _baseline_override_value(perv_validation_km: object) -> float | None:
@@ -448,14 +438,25 @@ def km_dynamics_test(
     c_min_threshold: float = 0.25,
     green_threshold: float = 0.15,
 ) -> dict[str, object]:
-    contract = validate_monitoring_metric(
-        _km_compatible_metric(monitoring_metric),
-        require_computed=False,
-    )
+    contract = validate_monitoring_metric(monitoring_metric, require_computed=False)
     if contract["status"] != "computed":
         return _not_computable_result(
             contract,
             reason=contract.get("reason", "monitoring_metric невычислим"),
+            acc_auto=acc_auto,
+            c_min_threshold=c_min_threshold,
+        )
+    reconciliation = _baseline_reconciliation(contract)
+    if reconciliation != "match":
+        # Второй рубеж после адаптера: baseline, который план не воспроизвёл на
+        # корзине, несопоставим с КМ мониторинга. Сравнивать их — красить
+        # светофор по двум разным формулам.
+        return _not_computable_result(
+            contract,
+            reason=(
+                "Baseline не воспроизведён планом на эталонной корзине "
+                f"(reconciliation={reconciliation!r}): динамика КМ не определена"
+            ),
             acc_auto=acc_auto,
             c_min_threshold=c_min_threshold,
         )
@@ -547,6 +548,7 @@ def km_dynamics_test(
     )
     metric_details = {
         "name": contract["name"],
+        "baseline_reconciliation": reconciliation,
         "КМ на мониторинге": current,
         "КМ на первичной валидации": baseline,
         "Дельта КМ": delta,
@@ -571,5 +573,6 @@ def km_dynamics_test(
             reason=reason,
             assessment_mode=contract["assessment_mode"],
             coverage=metric_details["coverage"],
+            reconciliation=reconciliation,
         ),
     }
