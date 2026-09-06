@@ -276,6 +276,7 @@ def _report_html(
     green_threshold: float = 0.15,
     c_min_threshold: float = 0.25,
     reconciliation: str | None = None,
+    formula: str | None = None,
 ) -> str:
     display_semaphore, show_criteria_semaphore = _helpers()
     criteria = show_criteria_semaphore(
@@ -299,6 +300,7 @@ def _report_html(
         {
             "Показатель": [
                 "Метрика",
+                "Формула КМ",
                 "Сверка baseline с отчётом о валидации",
                 "Значение КМ на валидации",
                 "Значение КМ на мониторинге",
@@ -311,6 +313,7 @@ def _report_html(
             ],
             "Значение": [
                 html.escape("не определена" if name is None else str(name)),
+                html.escape(formula or "не определена"),
                 html.escape(_RECONCILIATION_LABEL.get(reconciliation, str(reconciliation or "не выполнена"))),
                 "не определено" if baseline is None else f"{baseline:.6g}",
                 "не определено" if current is None else f"{current:.6g}",
@@ -342,7 +345,7 @@ def _report_html(
 <p style="text-align: left;">Оценки мониторинговых диалогов выставляет автоассесор, откалиброванный на эталонной разметке тестовой корзины.</p>
 <p style="text-align: left;"><b>Алгоритм расчета</b></p>
 <ol style="text-align: left; margin-left: 20px; padding-left: 20px;">
-    <li style="text-align: left;">Единицы оценки формируются по assessment_mode контракта, ключевая метрика агрегируется по правилам monitoring_metric.</li>
+    <li style="text-align: left;">Единицы оценки формируются по assessment_mode контракта; КМ считается формулой контракта — той же, которой адаптер воспроизвёл значение отчёта о валидации на эталонной корзине.</li>
     <li style="text-align: left;">Вычисляется относительное снижение КМ мониторинга к КМ первичной валидации.</li>
 </ol>
 <p style="text-align: left;"><b>Критерии выставления светофора</b></p>
@@ -399,6 +402,7 @@ def _not_computable_result(
             assessment_mode=contract.get("assessment_mode"),
             coverage=metric_details["coverage"],
             reconciliation=_baseline_reconciliation(contract),
+            formula=contract.get("formula"),
         ),
     }
 
@@ -548,6 +552,7 @@ def km_dynamics_test(
     )
     metric_details = {
         "name": contract["name"],
+        "formula": monitoring["formula"],
         "baseline_reconciliation": reconciliation,
         "КМ на мониторинге": current,
         "КМ на первичной валидации": baseline,
@@ -574,5 +579,6 @@ def km_dynamics_test(
             assessment_mode=contract["assessment_mode"],
             coverage=metric_details["coverage"],
             reconciliation=reconciliation,
+            formula=monitoring["formula"],
         ),
     }

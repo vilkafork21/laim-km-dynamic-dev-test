@@ -48,6 +48,7 @@ def main(
             "status": result["status"],
             "metric_details": details,
             "km_name": details["name"],
+            "km_formula": details.get("formula"),
             "km_baseline": details["КМ на первичной валидации"],
             "km_monitoring": details["КМ на мониторинге"],
             "km_delta": details["Дельта КМ"],

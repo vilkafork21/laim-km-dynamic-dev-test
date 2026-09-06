@@ -255,6 +255,7 @@ def test_node_entrypoint_exposes_baseline_and_monitoring():
     assert all_results["km_monitoring"] == pytest.approx(0.75)
     assert all_results["color"] == "green"
     assert all_results["coverage"]["scored_units"] == 4
+    assert all_results["km_formula"] == "mean(main_metric)"
     assert "<h2" in result["test_description"]
 
 
@@ -279,3 +280,27 @@ def test_materialize_majority_from_selector_columns():
     )
     assert reason is None
     assert result["main_metric"].tolist() == [1.0, 1.0, 0.0]
+
+
+def test_formula_contract_is_evaluated_on_judge_labels():
+    """Контракт с формулой отчёта: КМ считается по колонкам разметки, не по main_metric."""
+    payload = contract(
+        method="formula",
+        sources=[
+            {"source_id": "source_1", "name": "prediction", "column_name": "класс_output_answer",
+             "role": "prediction", "normalization": "label", "polarity": "direct"},
+            {"source_id": "source_2", "name": "target", "column_name": "класс_reference_answer",
+             "role": "target", "normalization": "label", "polarity": "direct"},
+        ],
+        baseline=0.5833,
+    )
+    payload["formula"] = 'f1(prediction, target, "macro")'
+    frame = scored([None] * 5)
+    frame["класс_output_answer"] = ["a", "a", "b", "b", "a"]
+    frame["класс_reference_answer"] = ["a", "b", "b", "b", "b"]
+    result = km_dynamics_test(acc_auto=0.9, monitoring_metric=payload, scored_df=frame)
+    assert result["status"] == "computed"
+    assert result["kluch_metric"]["КМ на мониторинге"] == pytest.approx(7 / 12)
+    assert result["kluch_metric"]["formula"] == 'f1(prediction, target, "macro")'
+    assert result["trafic_light"] == "green"
+    assert 'f1(prediction, target, &quot;macro&quot;)' in result["html_plot"]
