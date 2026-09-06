@@ -23,11 +23,10 @@ LAIM-нода Sber DS: сравнивает ключевую метрику (К�
 
 ## Когда тест серый
 
-Светофор считается только по сопоставимым числам. Серый выставляется, если:
+Контракт с невоспроизведённым baseline (`reconciliation != match`) не проходит
+валидацию пакета и до расчёта не доходит. Серый выставляется, если:
 
 - контракт `not_computable` (адаптер не построил план или baseline);
-- `baseline.reconciliation != "match"`: адаптер не воспроизвёл значение отчёта
-  на корзине, значит baseline и КМ мониторинга посчитаны разными формулами;
 - ассесор вернул `assessment_result.status != "computed"` (в том числе при
   массовых отказах судьи);
 - в `scored_df` нет входов формулы (колонок разметки контракта);
@@ -63,8 +62,7 @@ result["all_results"]["km_monitoring"]
 ```
 main.py                     # Sber DS entrypoint: светофор, all_results, HTML
 km_dynamics.py              # расчёт динамики: контрактная агрегация + отчёт
-laim_monitoring/            # общий пакет 3.0.0 (contract, units, scoring, drift, formula), та же копия, что у ассесора
-laim_monitoring/canonicalizer.py
+laim_monitoring/            # общий пакет (contract, units, scoring, drift, formula), та же копия, что у ассесора и адаптера
 html_report_helper.py       # HTML-компоненты отчёта
 tests/test_km_dynamics.py   # round-trip baseline, матрица светофора, серые случаи
 ```

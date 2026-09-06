@@ -1,4 +1,9 @@
-"""Расчет динамики КМ: контрактная агрегация + dev-отчёт с графиком."""
+"""Тест динамики КМ: значение на мониторинге против baseline контракта.
+
+Формулу и единицы оценки считает общий пакет laim_monitoring — тот же код,
+которым адаптер воспроизвёл baseline на эталонной корзине. Здесь только
+сравнение, светофор и отчёт.
+"""
 
 from __future__ import annotations
 
@@ -20,45 +25,21 @@ from laim_monitoring import (
     validate_monitoring_metric,
 )
 
-
-def _helpers():
-    from html_report_helper import (
-        display_semaphore,
-        show_criteria_semaphore,
-    )
-    return display_semaphore, show_criteria_semaphore
-
+GREEN_THRESHOLD = 0.15   # относительное снижение КМ до этого — зелёный
+RED_THRESHOLD = 0.25     # от этого и выше — красный
 
 _TABLE_STYLES = [
-    {
-        "selector": "th",
-        "props": [
-            ("background-color", "#f5f5f5"),
-            ("text-align", "center"),
-            ("border", "1px solid #ddd"),
-            ("padding", "5px"),
-        ],
-    },
-    {
-        "selector": "td",
-        "props": [
-            ("text-align", "left"),
-            ("border", "1px solid #ddd"),
-            ("padding", "5px"),
-        ],
-    },
-    {
-        "selector": "",
-        "props": [("border-collapse", "collapse"), ("border", "1px solid black")],
-    },
+    {"selector": "th", "props": [("background-color", "#f5f5f5"), ("text-align", "center"),
+                                 ("border", "1px solid #ddd"), ("padding", "5px")]},
+    {"selector": "td", "props": [("text-align", "left"), ("border", "1px solid #ddd"), ("padding", "5px")]},
+    {"selector": "", "props": [("border-collapse", "collapse"), ("border", "1px solid black")]},
 ]
-
 _WIDGET_COLOR = {"yellow": "yellow", "gray": "grey"}
-_RECONCILIATION_LABEL = {
-    "match": "совпадает (план воспроизводит отчёт)",
-    "mismatch": "РАСХОДИТСЯ (baseline несопоставим с мониторингом)",
-    "not_applicable": "нет заявленного значения в отчёте",
-}
+
+
+def _helpers():
+    from html_report_helper import display_semaphore, show_criteria_semaphore
+    return display_semaphore, show_criteria_semaphore
 
 
 def plot_km_dynamics(
@@ -151,157 +132,80 @@ def plot_km_dynamics(
     return f'<img src="data:image/png;base64,{plot_base64}" alt="Динамика КМ" style="max-width:100%;">'
 
 
-def _report_html(
-    name: str | None,
-    baseline: float | None,
-    current: float | None,
-    delta: float | None,
-    accuracy: float | None,
-    color: str,
-    *,
-    reason: str,
-    assessment_mode: str | None,
-    coverage: dict[str, object],
-    green_threshold: float = 0.15,
-    c_min_threshold: float = 0.25,
-    reconciliation: str | None = None,
-    formula: str | None = None,
-) -> str:
+def _report_html(details: dict, color: str, reason: str, accuracy: float | None, assessment_mode: str | None) -> str:
     display_semaphore, show_criteria_semaphore = _helpers()
     criteria = show_criteria_semaphore(
-        f"Относительное снижение КМ не более {green_threshold:.0%}",
-        f"Относительное снижение КМ от {green_threshold:.0%} до {c_min_threshold:.0%}",
-        f"Относительное снижение КМ более {c_min_threshold:.0%}",
+        f"Относительное снижение КМ не более {GREEN_THRESHOLD:.0%}",
+        f"Относительное снижение КМ от {GREEN_THRESHOLD:.0%} до {RED_THRESHOLD:.0%}",
+        f"Относительное снижение КМ более {RED_THRESHOLD:.0%}",
         "КМ или оценка ассесора невычислимы",
         _TABLE_STYLES,
     ).to_html(border=0, classes="table")
+    coverage = details["coverage"]
+    scored, total = coverage.get("scored_units"), coverage.get("total_units")
+    baseline, current, delta = details["baseline"], details["monitoring"], details["delta"]
 
-    total_units = coverage.get("total_units")
-    scored_units = coverage.get("scored_units")
-    coverage_text = (
-        "не определено"
-        if total_units is None and scored_units is None
-        else f"{scored_units if scored_units is not None else '?'} / "
-        f"{total_units if total_units is not None else '?'}"
-    )
-    semaphore_html = display_semaphore(_WIDGET_COLOR.get(color, color), return_html=True)
-    rows = pd.DataFrame(
-        {
-            "Показатель": [
-                "Метрика",
-                "Формула КМ",
-                "Сверка baseline с отчётом о валидации",
-                "Значение КМ на валидации",
-                "Значение КМ на мониторинге",
-                "Относительное снижение",
-                "Точность автоассесора (калибровка)",
-                "Режим оценки",
-                "Покрытие, scored / total",
-                "Комментарий",
-                "Результат теста",
-            ],
-            "Значение": [
-                html.escape("не определена" if name is None else str(name)),
-                html.escape(formula or "не определена"),
-                html.escape(_RECONCILIATION_LABEL.get(reconciliation, str(reconciliation or "не выполнена"))),
-                "не определено" if baseline is None else f"{baseline:.6g}",
-                "не определено" if current is None else f"{current:.6g}",
-                "не определено" if delta is None else f"{delta:.1%}",
-                "не определена" if accuracy is None else f"{accuracy:.3f}",
-                html.escape(assessment_mode or "не определён"),
-                coverage_text,
-                html.escape(reason),
-                semaphore_html,
-            ],
-        }
-    )
+    def num(value, fmt):
+        return "не определено" if value is None else format(value, fmt)
+
+    rows = pd.DataFrame({
+        "Показатель": [
+            "Метрика", "Формула КМ", "Значение КМ на валидации", "Значение КМ на мониторинге",
+            "Относительное снижение", "Точность автоассесора (калибровка)", "Режим оценки",
+            "Покрытие, scored / total", "Комментарий", "Результат теста",
+        ],
+        "Значение": [
+            html.escape(details["name"] or "не определена"),
+            html.escape(details["formula"] or "не определена"),
+            num(baseline, ".6g"), num(current, ".6g"), num(delta, ".1%"), num(accuracy, ".3f"),
+            html.escape(assessment_mode or "не определён"),
+            f"{'?' if scored is None else scored} / {'?' if total is None else total}",
+            html.escape(reason),
+            display_semaphore(_WIDGET_COLOR.get(color, color), return_html=True),
+        ],
+    })
     try:
-        results = rows.style.hide().set_table_styles(_TABLE_STYLES)
+        table = rows.style.hide().set_table_styles(_TABLE_STYLES)
     except AttributeError:
-        results = rows.style.hide_index().set_table_styles(_TABLE_STYLES)
-    results_html = results.to_html(border=0, classes="table")
-
+        table = rows.style.hide_index().set_table_styles(_TABLE_STYLES)
     plot_html = ""
     if baseline is not None and current is not None:
-        plot_html = plot_km_dynamics(
-            name, baseline, current, accuracy, green_threshold, c_min_threshold
-        )
-
+        plot_html = plot_km_dynamics(details["name"], baseline, current, accuracy, GREEN_THRESHOLD, RED_THRESHOLD)
     return f"""
 <h2 style="text-align: center;">Тест на динамику ключевой метрики</h2>
 <p style="text-align: left;"><b>Цель теста</b></p>
 <p style="text-align: left;">Оценить изменение ключевой метрики качества агента на мониторинговых данных относительно значения первичной валидации.</p>
-<p style="text-align: left;">Оценки мониторинговых диалогов выставляет автоассесор, откалиброванный на эталонной разметке тестовой корзины.</p>
-<p style="text-align: left;"><b>Алгоритм расчета</b></p>
-<ol style="text-align: left; margin-left: 20px; padding-left: 20px;">
-    <li style="text-align: left;">Единицы оценки формируются по assessment_mode контракта; КМ считается формулой контракта — той же, которой адаптер воспроизвёл значение отчёта о валидации на эталонной корзине.</li>
-    <li style="text-align: left;">Вычисляется относительное снижение КМ мониторинга к КМ первичной валидации.</li>
-</ol>
+<p style="text-align: left;">Разметку мониторинга выставляет автоассесор, откалиброванный на эталонной корзине; КМ считается формулой контракта — той же, которой адаптер воспроизвёл значение отчёта о валидации на корзине.</p>
 <p style="text-align: left;"><b>Критерии выставления светофора</b></p>
 <div style="text-align: left; width: 100%;">{criteria}</div><br>
 <p style="text-align: left;"><b>Результаты теста</b></p>
-<div style="text-align: left; width: 100%;">{results_html}</div><br>
+<div style="text-align: left; width: 100%;">{table.to_html(border=0, classes="table")}</div><br>
 {plot_html}
 """.strip()
 
 
-def _not_computable_result(
-    contract: dict,
-    *,
-    reason: str,
-    acc_auto: float | None,
-    c_min_threshold: float,
-    status_details: dict | None = None,
-) -> dict[str, object]:
-    baseline_payload = contract.get("baseline")
-    baseline_value = (
-        baseline_payload.get("value")
-        if isinstance(baseline_payload, dict)
-        else None
-    )
-    baseline = None if baseline_value is None else float(baseline_value)
-    name = contract.get("name")
-    details = status_details or {}
-    metric_details = {
-        "name": name,
-        "КМ на мониторинге": None,
-        "КМ на первичной валидации": baseline,
-        "Дельта КМ": None,
-        "Порог минимальной дельты КМ": c_min_threshold,
-        "coverage": {
-            "total_units": details.get("total_units"),
-            "scored_units": details.get("scored_units"),
-            "excluded_units": None,
-            "weight_sum": None,
-        },
-    }
+def _result(contract: dict, color: str, reason: str, details: dict, acc_auto: float | None) -> dict:
     return {
-        "status": "not_computable",
-        "trafic_light": "gray",
+        "status": "computed" if color != "gray" else "not_computable",
+        "color": color,
         "reason": reason,
-        "kluch_metric": metric_details,
-        "html_plot": _report_html(
-            name,
-            baseline,
-            None,
-            None,
-            acc_auto,
-            "gray",
-            reason=reason,
-            assessment_mode=contract.get("assessment_mode"),
-            coverage=metric_details["coverage"],
-            reconciliation=_baseline_reconciliation(contract),
-            formula=contract.get("formula"),
-        ),
+        "details": details,
+        "html_plot": _report_html(details, color, reason, acc_auto, contract.get("assessment_mode")),
     }
 
 
-def _baseline_reconciliation(contract: dict) -> str | None:
-    baseline = contract.get("baseline")
-    if not isinstance(baseline, dict):
-        return None
-    status = baseline.get("reconciliation")
-    return None if status is None else str(status)
+def _details(contract: dict, monitoring: dict | None = None, delta: float | None = None) -> dict:
+    baseline = (contract.get("baseline") or {}).get("value")
+    coverage = {key: (monitoring or {}).get(key) for key in ("total_units", "scored_units", "excluded_units", "weight_sum")}
+    return {
+        "name": contract.get("metric_name"),
+        "formula": (monitoring or {}).get("formula") or contract.get("formula"),
+        "baseline": None if baseline is None else float(baseline),
+        "monitoring": None if monitoring is None else float(monitoring["value"]),
+        "delta": delta,
+        "red_threshold": RED_THRESHOLD,
+        "coverage": coverage,
+    }
 
 
 def km_dynamics_test(
@@ -310,43 +214,32 @@ def km_dynamics_test(
     scored_df: pd.DataFrame,
     assessment_result: dict | None = None,
     min_units: int = 30,
-    c_min_threshold: float = 0.25,
-    green_threshold: float = 0.15,
 ) -> dict[str, object]:
     """Светофор по относительному снижению КМ мониторинга к baseline контракта.
 
     Серый (не цвет), когда сравнивать нечего или нельзя: контракт не вычислен,
-    baseline не воспроизведён на корзине, ассесор отказался, входов формулы нет
-    в scored_df, единиц меньше min_units, baseline равен нулю.
+    ассесор отказался, входов формулы нет в scored_df, единиц меньше min_units,
+    baseline равен нулю. Контракт с невоспроизведённым baseline отвергается
+    validate_monitoring_metric и до сюда не доходит.
     """
     contract = validate_monitoring_metric(monitoring_metric, require_computed=False)
 
-    def gray(reason: str, details: dict | None = None) -> dict[str, object]:
-        return _not_computable_result(
-            contract, reason=reason, acc_auto=acc_auto,
-            c_min_threshold=c_min_threshold, status_details=details,
-        )
+    def gray(reason: str, monitoring: dict | None = None) -> dict:
+        return _result(contract, "gray", reason, _details(contract, monitoring), acc_auto)
 
     if contract["status"] != "computed":
         return gray(contract.get("reason", "monitoring_metric невычислим"))
-    reconciliation = _baseline_reconciliation(contract)
-    if reconciliation != "match":
-        return gray(
-            "Baseline не воспроизведён планом на эталонной корзине "
-            f"(reconciliation={reconciliation!r}): динамика КМ не определена"
-        )
     if assessment_result is not None and not isinstance(assessment_result, dict):
         raise TypeError("assessment_result должен быть объектом")
     if assessment_result is not None and assessment_result.get("status") != "computed":
         reason = assessment_result.get("reason")
-        if not isinstance(reason, str) or not reason.strip():
-            reason = f"assessment_status={assessment_result.get('status')!r}"
-        return gray(reason, assessment_result)
+        return gray(reason if isinstance(reason, str) and reason.strip()
+                    else f"assessment_status={assessment_result.get('status')!r}")
     if not isinstance(scored_df, pd.DataFrame) or scored_df.empty:
         return gray("scored_df пуст: ассесор не разметил мониторинг")
 
     # Если судья ставил готовый score (формула отчёта на трейсах неприменима),
-    # считаем ровно то, что он поставил, и берём этот контракт из общего пакета.
+    # считаем ровно то, что он поставил, тем же контрактом, что и ассесор.
     km_contract = (
         judge_score_contract(contract)
         if (assessment_result or {}).get("scoring_semantics") == "judge_final_score"
@@ -355,71 +248,22 @@ def km_dynamics_test(
     try:
         monitoring = aggregate_main_metric(scored_df, km_contract)
     except MonitoringContractError as exc:
-        return gray(str(exc), {"total_units": len(scored_df), "scored_units": 0})
+        return gray(str(exc))
     if monitoring["scored_units"] < min_units:
         return gray(
-            f"Оценено единиц {monitoring['scored_units']} < min_units={min_units}: "
-            "недостаточно данных для динамики КМ",
+            f"Оценено единиц {monitoring['scored_units']} < min_units={min_units}: недостаточно данных",
             monitoring,
         )
 
-    baseline = float(contract["baseline"]["value"])
-    current = float(monitoring["value"])
-
+    baseline, current = float(contract["baseline"]["value"]), float(monitoring["value"])
     if baseline == 0:
-        delta = 0.0 if current == 0 else None
+        return gray("Baseline КМ равен нулю, относительная динамика не определена.", monitoring)
+    delta = (baseline - current) / baseline
+    if delta >= RED_THRESHOLD:
+        color, reason = "red", "Снижение КМ больше допустимого отклонения."
+    elif delta <= GREEN_THRESHOLD:
+        color, reason = "green", "Снижение КМ находится в зеленой зоне."
     else:
-        delta = (baseline - current) / baseline
-
-    if delta is None:
-        color = "gray"
-        reason = "Baseline КМ равен нулю, относительная динамика не определена."
-    elif delta >= c_min_threshold:
-        color = "red"
-        reason = "Снижение КМ больше допустимого отклонения."
-    elif delta <= green_threshold:
-        color = "green"
-        reason = "Снижение КМ находится в зеленой зоне."
-    else:
-        color = "yellow"
-        reason = "Снижение КМ находится в желтой зоне."
-
-    logging.info(
-        "KM dynamics: baseline=%s current=%s delta=%s color=%s",
-        baseline,
-        current,
-        delta,
-        color,
-    )
-    metric_details = {
-        "name": contract["name"],
-        "formula": monitoring["formula"],
-        "baseline_reconciliation": reconciliation,
-        "КМ на мониторинге": current,
-        "КМ на первичной валидации": baseline,
-        "Дельта КМ": delta,
-        "Порог минимальной дельты КМ": c_min_threshold,
-        "coverage": {
-            key: monitoring[key]
-            for key in ("total_units", "scored_units", "excluded_units", "weight_sum")
-        },
-    }
-    return {
-        "status": "computed",
-        "trafic_light": color,
-        "reason": reason,
-        "kluch_metric": metric_details,
-        "html_plot": _report_html(
-            contract["name"],
-            baseline,
-            current,
-            delta,
-            acc_auto,
-            color,
-            reason=reason,
-            assessment_mode=contract["assessment_mode"],
-            coverage=metric_details["coverage"],
-            reconciliation=reconciliation,
-            formula=monitoring["formula"],
-        ),
-    }
+        color, reason = "yellow", "Снижение КМ находится в желтой зоне."
+    logging.info("KM dynamics: baseline=%s current=%s delta=%s color=%s", baseline, current, delta, color)
+    return _result(contract, color, reason, _details(contract, monitoring, delta), acc_auto)

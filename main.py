@@ -7,9 +7,9 @@ import logging
 import pandas as pd
 
 import laim_monitoring
-from km_dynamics import km_dynamics_test
+from km_dynamics import GREEN_THRESHOLD, RED_THRESHOLD, km_dynamics_test
 
-_PLATFORM_COLOR = {"yellow": "amber", "gray": "gray"}
+_PLATFORM_COLOR = {"yellow": "amber"}
 _TITLE = {
     "green": "Динамика ключевой метрики соответствует зеленому светофору",
     "yellow": "Динамика ключевой метрики соответствует желтому светофору",
@@ -33,30 +33,25 @@ def main(
         assessment_result=assessment_result,
         min_units=int(min_units),
     )
-    color = result["trafic_light"]
-    platform_color = _PLATFORM_COLOR.get(color, color)
-    details = result["kluch_metric"]
+    color, details = result["color"], result["details"]
     return {
         "all_results": {
             "calculated_traffic_lights": {
-                "test_light": platform_color,
+                "test_light": _PLATFORM_COLOR.get(color, color),
                 "semaphore_title": _TITLE[color],
             },
-            "color": platform_color,
+            "color": _PLATFORM_COLOR.get(color, color),
             "test_name": "km_test",
             "laim_monitoring_version": laim_monitoring.__version__,
             "status": result["status"],
             "metric_details": details,
             "km_name": details["name"],
-            "km_formula": details.get("formula"),
-            "km_baseline": details["КМ на первичной валидации"],
-            "km_monitoring": details["КМ на мониторинге"],
-            "km_delta": details["Дельта КМ"],
+            "km_formula": details["formula"],
+            "km_baseline": details["baseline"],
+            "km_monitoring": details["monitoring"],
+            "km_delta": details["delta"],
             "coverage": details["coverage"],
-            "thresholds": {
-                "green": 0.15,
-                "red": details["Порог минимальной дельты КМ"],
-            },
+            "thresholds": {"green": GREEN_THRESHOLD, "red": RED_THRESHOLD},
             "reason": result["reason"],
         },
         "test_description": result["html_plot"],
