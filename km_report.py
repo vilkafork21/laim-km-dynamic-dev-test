@@ -164,7 +164,7 @@ def report_html(
         "Снижение или нарушение C_MIN возможно, но интервалом не подтверждено",
         f"Оптимистичная граница интервала: снижение КМ не менее {thresholds['red']:g} "
         f"({unit_word}) либо интервал целиком ниже C_MIN",
-        "Единиц меньше минимума, доля отказов судьи выше допуска, база или оценка невычислимы",
+        "Единиц меньше минимума, есть неизвестные оценки, база или оценка невычислимы",
         _TABLE_STYLES,
     ).to_html(border=0, classes="table")
 
@@ -175,6 +175,22 @@ def report_html(
         else f"{details.get('scored_units')} оценено / {details.get('refused_units')} отказов / "
         f"{details.get('total_units')} всего"
     )
+    bounds = details.get("completion_bounds")
+    missing_text = ""
+    if details.get("refused_units") and bounds is not None:
+        observed = details.get("observed_mean")
+        observed_text = "не определено" if observed is None else f"{observed:.6g}"
+        missing_text = (
+            "<h3>Неизвестные оценки в полученном наборе</h3>"
+            f"<p>Среднее оценённой части: {observed_text}. "
+            f"Масса отказов: {details['refused_weight']:.6g} из {details['total_weight']:.6g} "
+            f"({details['refused_weight_share']:.1%}).</p>"
+            f"<p>Границы заполнения: [{bounds['lower']:.6g}; {bounds['upper']:.6g}]. "
+            "Это не доверительный интервал и не оценка всего отчётного периода. "
+            "Известные оценки здесь считаются фиксированными; неизвестным допускается "
+            "любое значение утверждённой шкалы. Ошибка судьи и неотобранные обращения "
+            "этими границами не покрываются.</p>"
+        )
     interval_text = (
         "не определён"
         if interval_ is None
@@ -187,7 +203,7 @@ def report_html(
                 "Метрика",
                 "Значение КМ на валидации",
                 "Значение КМ на мониторинге",
-                "Интервал КМ на мониторинге (95%)",
+                "Интервал КМ на мониторинге",
                 "Снижение КМ",
                 "Единицы снижения",
                 "C_MIN",
@@ -231,12 +247,13 @@ def report_html(
 <p style="text-align: left;"><b>Алгоритм расчета</b></p>
 <ol style="text-align: left; margin-left: 20px; padding-left: 20px;">
     <li style="text-align: left;">Единицы оценки формируются по assessment_mode контракта, ключевая метрика агрегируется по правилам monitoring_metric.</li>
-    <li style="text-align: left;">Отказы судьи исключаются; при недоборе единиц или избытке отказов тест не оценивается.</li>
+    <li style="text-align: left;">При неизвестных оценках сохраняются их веса и границы заполнения; вывод о КМ периода не формируется. Недобор оценённых единиц также запрещает вывод.</li>
     <li style="text-align: left;">Строится интервал КМ мониторинга; снижение к КМ первичной валидации и минимальный уровень C_MIN проверяются по границам интервала.</li>
 </ol>
 <p style="text-align: left;"><b>Критерии выставления светофора</b></p>
 <div style="text-align: left; width: 100%;">{criteria}</div><br>
 <p style="text-align: left;"><b>Результаты теста</b></p>
 <div style="text-align: left; width: 100%;">{results_html}</div><br>
+{missing_text}
 {plot_html}
 """.strip()

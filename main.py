@@ -24,36 +24,30 @@ def main(
     acc_auto: float | None = None,
     scored_df: pd.DataFrame | None = None,
     assessment_result: dict | None = None,
-    perv_validation_km: object = None,
-    metric_spec: dict | None = None,
     green_threshold: float = 0.15,
     red_threshold: float = 0.25,
     delta_unit: str = "absolute",
     c_min: float = 0.0,
     min_valid_units: int = 50,
-    max_invalid_share: float = 0.2,
 ):
     # c_min = 0 означает «минимальный уровень не задан»: любое значение метрики
     # с направлением «больше — лучше» не ниже нуля.
     minimum_level = None if c_min <= 0 else float(c_min)
     logger.info(
-        "[km] пороги green<=%s red>=%s unit=%s c_min=%s min_units=%s max_refused=%s",
+        "[km] пороги green<=%s red>=%s unit=%s c_min=%s min_units=%s",
         green_threshold, red_threshold, delta_unit, minimum_level,
-        min_valid_units, max_invalid_share,
+        min_valid_units,
     )
     result = km_dynamics_test(
         acc_auto=acc_auto,
         monitoring_metric=monitoring_metric,
         scored_df=scored_df,
         assessment_result=assessment_result,
-        perv_validation_km=perv_validation_km,
-        metric_spec=metric_spec,
         green_threshold=green_threshold,
         red_threshold=red_threshold,
         delta_unit=delta_unit,
         c_min=minimum_level,
         min_valid_units=min_valid_units,
-        max_invalid_share=max_invalid_share,
     )
     color = result["trafic_light"]
     platform_color = _PLATFORM_COLOR.get(color, color)
@@ -66,6 +60,8 @@ def main(
             },
             "color": platform_color,
             "test_name": "km_test",
+            "definition_id": monitoring_metric.get("definition_id"),
+            "run_id": (assessment_result or {}).get("run_id"),
             "status": result["status"],
             "reason": result["reason"],
             "reason_code": result["reason_code"],
