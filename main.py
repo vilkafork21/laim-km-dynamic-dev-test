@@ -6,6 +6,7 @@ import logging
 
 import pandas as pd
 
+import laim_monitoring
 from km_dynamics import km_dynamics_test
 
 _PLATFORM_COLOR = {"yellow": "amber", "gray": "gray"}
@@ -22,8 +23,7 @@ def main(
     monitoring_metric: dict,
     scored_df: pd.DataFrame,
     assessment_result: dict | None = None,
-    perv_validation_km: object = None,
-    metric_spec: dict | None = None,
+    min_units: int = 30,
 ):
     logging.info("Тест динамики ключевой метрики запущен")
     result = km_dynamics_test(
@@ -31,8 +31,7 @@ def main(
         monitoring_metric=monitoring_metric,
         scored_df=scored_df,
         assessment_result=assessment_result,
-        perv_validation_km=perv_validation_km,
-        metric_spec=metric_spec,
+        min_units=int(min_units),
     )
     color = result["trafic_light"]
     platform_color = _PLATFORM_COLOR.get(color, color)
@@ -45,6 +44,7 @@ def main(
             },
             "color": platform_color,
             "test_name": "km_test",
+            "laim_monitoring_version": laim_monitoring.__version__,
             "status": result["status"],
             "metric_details": details,
             "km_name": details["name"],

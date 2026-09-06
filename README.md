@@ -14,12 +14,12 @@ LAIM-нода Sber DS: сравнивает ключевую метрику (К�
 
 | Вход | Что это |
 |------|---------|
-| `monitoring_metric` | контракт: метод score, источники, агрегация, baseline и статус его сверки с отчётом о валидации |
-| `scored_df` | monitoring UMR с колонкой `main_metric` от ассесора |
+| `monitoring_metric` | контракт: формула КМ, источники, агрегация, baseline и статус его сверки с отчётом о валидации |
+| `scored_df` | monitoring UMR от ассесора: разметка судьи в колонках контракта, построчный score в `main_metric` |
 | `acc_auto` | точность ассесора на holdout эталонной корзины, только для отчёта |
-| `assessment_result` | машинный статус ассесора; `not_computable` → серый |
-| `perv_validation_km` | необязательный явный override baseline |
-| `metric_spec` | необязательная ветка kriteria-selector для сборки `main_metric` из колонок |
+| `assessment_result` | машинный статус ассесора; `not_computable` → серый; `scoring_semantics=judge_final_score` → считается готовый score судьи |
+
+Настройка `min_units` (по умолчанию 30): меньше оценённых единиц — серый.
 
 ## Когда тест серый
 
@@ -28,8 +28,10 @@ LAIM-нода Sber DS: сравнивает ключевую метрику (К�
 - контракт `not_computable` (адаптер не построил план или baseline);
 - `baseline.reconciliation != "match"`: адаптер не воспроизвёл значение отчёта
   на корзине, значит baseline и КМ мониторинга посчитаны разными формулами;
-- ассесор вернул `assessment_result.status != "computed"`;
-- в `scored_df` нет `main_metric`;
+- ассесор вернул `assessment_result.status != "computed"` (в том числе при
+  массовых отказах судьи);
+- в `scored_df` нет входов формулы (колонок разметки контракта);
+- оценённых единиц меньше `min_units`;
 - baseline равен нулю (относительная дельта не определена).
 
 ## Пороги
@@ -61,7 +63,7 @@ result["all_results"]["km_monitoring"]
 ```
 main.py                     # Sber DS entrypoint: светофор, all_results, HTML
 km_dynamics.py              # расчёт динамики: контрактная агрегация + отчёт
-laim_monitoring/core.py     # общий контракт (та же копия, что у ассесора)
+laim_monitoring/            # общий пакет 3.0.0 (contract, units, scoring, drift, formula), та же копия, что у ассесора
 laim_monitoring/canonicalizer.py
 html_report_helper.py       # HTML-компоненты отчёта
 tests/test_km_dynamics.py   # round-trip baseline, матрица светофора, серые случаи

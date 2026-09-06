@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from km_dynamics import km_dynamics_test, materialize_main_metric  # noqa: E402
+from km_dynamics import km_dynamics_test as _km_dynamics_test  # noqa: E402
 from laim_monitoring import (  # noqa: E402
     MonitoringContractError,
     aggregate_main_metric,
@@ -28,6 +28,11 @@ from laim_monitoring import (  # noqa: E402
     validate_monitoring_metric,
 )
 from main import main as node_main  # noqa: E402
+
+
+def km_dynamics_test(**kwargs):
+    kwargs.setdefault("min_units", 1)  # в тестах корзины маленькие
+    return _km_dynamics_test(**kwargs)
 
 
 def contract(
@@ -100,12 +105,15 @@ def contract(
 
 
 def scored(values: list[float | None], weights: list[int] | None = None) -> pd.DataFrame:
+    """scored_data ассесора: разметка судьи лежит в колонке контракта (итог_metric),
+    построчный score — в main_metric."""
     size = len(values)
     return pd.DataFrame({
         "query_id": [f"q{i}" for i in range(size)],
         "input_query": [f"вопрос {i}" for i in range(size)],
         "output_answer": [f"ответ {i}" for i in range(size)],
         "input_query_count": weights or [1] * size,
+        "итог_metric": values,
         "main_metric": values,
     })
 
@@ -151,9 +159,12 @@ def test_all_assessors_contract_is_accepted_without_rewrite():
         ],
         baseline=0.5,
     )
-    validate_monitoring_metric(payload)
-    result = aggregate_main_metric(scored([1.0, 0.0, 1.0, None]), payload)
-    assert result["value"] == pytest.approx(2 / 3)
+    frame = scored([None] * 4).drop(columns=["итог_metric", "main_metric"])
+    frame["асессор_1_metric"] = [1, 1, 0, 1]
+    frame["асессор_2_metric"] = [1, 0, 1, None]
+    result = aggregate_main_metric(frame, payload)
+    assert result["formula"] == "mean(min(source_1, source_2))"
+    assert result["value"] == pytest.approx(1 / 3)
     assert result["excluded_units"] == 1
 
 
@@ -237,17 +248,47 @@ def test_assessor_refusal_is_gray():
     assert result["reason"] == "судья недоступен"
 
 
-def test_scored_df_without_main_metric_is_gray():
-    frame = scored([1, 1]).drop(columns=["main_metric"])
+def test_scored_df_without_formula_inputs_is_gray():
+    frame = scored([1, 1]).drop(columns=["итог_metric"])
     result = km_dynamics_test(acc_auto=0.9, monitoring_metric=contract(), scored_df=frame)
     assert result["trafic_light"] == "gray"
-    assert "main_metric" in result["reason"]
+    assert "входов формулы" in result["reason"]
+
+
+def test_too_few_units_is_gray():
+    result = km_dynamics_test(
+        acc_auto=0.9, monitoring_metric=contract(), scored_df=scored([1, 1, 1]), min_units=30,
+    )
+    assert result["trafic_light"] == "gray"
+    assert "3 < min_units=30" in result["reason"]
+
+
+def test_judge_final_score_semantics_aggregates_judge_score():
+    """Формула контракта на трейсах неприменима — считается то, что поставил судья."""
+    payload = contract(
+        method="accuracy",
+        sources=[
+            {"source_id": "source_1", "column_name": "класс_output_answer", "role": "prediction",
+             "normalization": "label", "polarity": "direct"},
+            {"source_id": "source_2", "column_name": "класс_reference_answer", "role": "target",
+             "normalization": "label", "polarity": "direct"},
+        ],
+        baseline=0.75,
+    )
+    result = km_dynamics_test(
+        acc_auto=0.9, monitoring_metric=payload,
+        scored_df=scored([1, 1, 1, 0]).drop(columns=["итог_metric"]),
+        assessment_result={"status": "computed", "scoring_semantics": "judge_final_score"},
+    )
+    assert result["status"] == "computed"
+    assert result["kluch_metric"]["formula"] == "mean(assessment_score)"
+    assert result["kluch_metric"]["КМ на мониторинге"] == pytest.approx(0.75)
 
 
 def test_node_entrypoint_exposes_baseline_and_monitoring():
     payload = contract(baseline=0.8)
     result = node_main(
-        acc_auto=0.9, monitoring_metric=payload, scored_df=scored([1, 1, 1, 0]),
+        acc_auto=0.9, monitoring_metric=payload, scored_df=scored([1, 1, 1, 0]), min_units=1,
     )
     all_results = result["all_results"]
     assert all_results["test_name"] == "km_test"
@@ -255,52 +296,6 @@ def test_node_entrypoint_exposes_baseline_and_monitoring():
     assert all_results["km_monitoring"] == pytest.approx(0.75)
     assert all_results["color"] == "green"
     assert all_results["coverage"]["scored_units"] == 4
-    assert all_results["km_formula"] == "mean(main_metric)"
+    assert all_results["km_formula"] == "mean(source_1)"
+    assert all_results["laim_monitoring_version"]
     assert "<h2" in result["test_description"]
-
-
-# ----------------------------------------------------------------------------
-# materialize_main_metric (ветка kriteria-selector)
-# ----------------------------------------------------------------------------
-
-def test_materialize_keeps_existing_main_metric():
-    frame = scored(["1", "0", None])
-    result, reason = materialize_main_metric(frame, {"main_metric": "x"})
-    assert reason is None
-    assert result["main_metric"].tolist()[:2] == [1.0, 0.0]
-    assert math.isnan(result["main_metric"].tolist()[2])
-
-
-def test_materialize_majority_from_selector_columns():
-    frame = pd.DataFrame({"a": [1, 1, 0], "b": [1, 0, 0], "c": [0, 1, 1]})
-    result, reason = materialize_main_metric(
-        frame,
-        {"main_metric": "a", "other_metrics": ["b", "c"], "scoring_method": "majority",
-         "majority_denominator": "declared", "missing_policy": "exclude_unit"},
-    )
-    assert reason is None
-    assert result["main_metric"].tolist() == [1.0, 1.0, 0.0]
-
-
-def test_formula_contract_is_evaluated_on_judge_labels():
-    """Контракт с формулой отчёта: КМ считается по колонкам разметки, не по main_metric."""
-    payload = contract(
-        method="formula",
-        sources=[
-            {"source_id": "source_1", "name": "prediction", "column_name": "класс_output_answer",
-             "role": "prediction", "normalization": "label", "polarity": "direct"},
-            {"source_id": "source_2", "name": "target", "column_name": "класс_reference_answer",
-             "role": "target", "normalization": "label", "polarity": "direct"},
-        ],
-        baseline=0.5833,
-    )
-    payload["formula"] = 'f1(prediction, target, "macro")'
-    frame = scored([None] * 5)
-    frame["класс_output_answer"] = ["a", "a", "b", "b", "a"]
-    frame["класс_reference_answer"] = ["a", "b", "b", "b", "b"]
-    result = km_dynamics_test(acc_auto=0.9, monitoring_metric=payload, scored_df=frame)
-    assert result["status"] == "computed"
-    assert result["kluch_metric"]["КМ на мониторинге"] == pytest.approx(7 / 12)
-    assert result["kluch_metric"]["formula"] == 'f1(prediction, target, "macro")'
-    assert result["trafic_light"] == "green"
-    assert 'f1(prediction, target, &quot;macro&quot;)' in result["html_plot"]
