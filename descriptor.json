@@ -86,7 +86,7 @@
       "in": true,
       "type": "default",
       "shape": "shape_model",
-      "description": "Скалярная точность калибровки автоассессора; отображается в отчёте",
+      "description": "Точность калибровки Автоасессора; при известном значении ниже 0,6 тест серый. Полный уровень доверия проверяется по результатам калибровки.",
       "required": false,
       "order": 3
     },
@@ -151,6 +151,7 @@
         "main.py",
         "km_dynamics.py",
         "html_report_helper.py",
+        "html_report.py",
         "laim_monitoring/__init__.py",
         "laim_monitoring/core.py"
       ],

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import base64
 from copy import deepcopy
-import html
+from decimal import Decimal
 import json
 import io
 import logging
+import math
 import os
 import sys
 
@@ -16,6 +17,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from laim_monitoring import aggregate_main_metric, validate_monitoring_metric
+from laim_monitoring.core import _unitize, MonitoringContractError
 
 
 def _km_compatible_metric(payload: object) -> object:
@@ -159,41 +161,6 @@ def materialize_main_metric(
     return result, None
 
 
-def _helpers():
-    from html_report_helper import (
-        display_semaphore,
-        show_criteria_semaphore,
-    )
-    return display_semaphore, show_criteria_semaphore
-
-
-_TABLE_STYLES = [
-    {
-        "selector": "th",
-        "props": [
-            ("background-color", "#f5f5f5"),
-            ("text-align", "center"),
-            ("border", "1px solid #ddd"),
-            ("padding", "5px"),
-        ],
-    },
-    {
-        "selector": "td",
-        "props": [
-            ("text-align", "left"),
-            ("border", "1px solid #ddd"),
-            ("padding", "5px"),
-        ],
-    },
-    {
-        "selector": "",
-        "props": [("border-collapse", "collapse"), ("border", "1px solid black")],
-    },
-]
-
-_WIDGET_COLOR = {"yellow": "yellow", "gray": "grey"}
-
-
 def plot_km_dynamics(
     name: str | None,
     baseline: float,
@@ -254,7 +221,7 @@ def plot_km_dynamics(
         )
     arrow = "↓" if km_delta > 0 else ("↑" if km_delta < 0 else "→")
     ax.text(
-        dx - 0.05, (y_lo + y_hi) / 2.0, f"Δ = {km_delta:.3f}\n{arrow} {verdict}",
+        dx - 0.05, (y_lo + y_hi) / 2.0, f"Δ = {km_delta:.1%}\n{arrow} {verdict}",
         ha="right", va="center", fontsize=11, fontweight="bold", color=vcolor,
         bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor=vcolor, lw=1.4),
         zorder=5,
@@ -272,7 +239,7 @@ def plot_km_dynamics(
     accuracy_part = "" if accuracy is None else f"Точность автоасессора: {accuracy:.3f}    •    "
     ax.text(
         0.0, 1.012,
-        f"{accuracy_part}КМ: {baseline:.3f} → {current:.3f}    •    Δ = {km_delta:.3f}  ({verdict})",
+        f"{accuracy_part}КМ: {baseline:.3f} → {current:.3f}    •    Δ = {km_delta:.1%}  ({verdict})",
         transform=ax.transAxes, fontsize=10.5, color=vcolor, ha="left", fontweight="bold",
     )
     fig.tight_layout()
@@ -298,78 +265,45 @@ def _report_html(
     green_threshold: float = 0.15,
     c_min_threshold: float = 0.25,
 ) -> str:
-    display_semaphore, show_criteria_semaphore = _helpers()
-    criteria = show_criteria_semaphore(
-        f"Относительное снижение КМ не более {green_threshold:.0%}",
-        f"Относительное снижение КМ от {green_threshold:.0%} до {c_min_threshold:.0%}",
-        f"Относительное снижение КМ более {c_min_threshold:.0%}",
-        "КМ или оценка ассесора невычислимы",
-        _TABLE_STYLES,
-    ).to_html(border=0, classes="table")
+    from html_report import format_report_number, render_test_report
 
-    total_units = coverage.get("total_units")
-    scored_units = coverage.get("scored_units")
-    coverage_text = (
-        "не определено"
-        if total_units is None and scored_units is None
-        else f"{scored_units if scored_units is not None else '?'} / "
-        f"{total_units if total_units is not None else '?'}"
-    )
-    semaphore_html = display_semaphore(_WIDGET_COLOR.get(color, color), return_html=True)
-    rows = pd.DataFrame(
-        {
-            "Показатель": [
-                "Метрика",
-                "Значение КМ на валидации",
-                "Значение КМ на мониторинге",
-                "Относительное снижение",
-                "Точность автоассесора (калибровка)",
-                "Режим оценки",
-                "Покрытие, scored / total",
-                "Комментарий",
-                "Результат теста",
-            ],
-            "Значение": [
-                html.escape("не определена" if name is None else str(name)),
-                "не определено" if baseline is None else f"{baseline:.6g}",
-                "не определено" if current is None else f"{current:.6g}",
-                "не определено" if delta is None else f"{delta:.1%}",
-                "не определена" if accuracy is None else f"{accuracy:.3f}",
-                html.escape(assessment_mode or "не определён"),
-                coverage_text,
-                html.escape(reason),
-                semaphore_html,
-            ],
-        }
-    )
-    try:
-        results = rows.style.hide().set_table_styles(_TABLE_STYLES)
-    except AttributeError:
-        results = rows.style.hide_index().set_table_styles(_TABLE_STYLES)
-    results_html = results.to_html(border=0, classes="table")
-
+    mode = {"qa": "Пара «запрос — ответ» (qa)",
+            "turn_with_history": "Реплика с историей диалога (turn_with_history)",
+            "dialogue": "Диалог целиком (dialogue)"}.get(assessment_mode, assessment_mode or "Не указан")
+    rows = [
+        ("Ключевая метрика", name or "Не указана"),
+        ("Значение КМ на первичной валидации (КМ вал)", format_report_number(baseline)),
+        ("Значение КМ на мониторинге (КМ мон)", format_report_number(current)),
+        ("Относительное снижение Δ", format_report_number(delta, 1, percent=True)),
+        ("Точность Автоасессора (Acc auto)", format_report_number(accuracy)),
+        ("Уровень доверия / относительная согласованность (R κ)", "Нет данных; по одной точности уровень доверия не подтверждается"),
+        ("Режим оценки", mode),
+        ("Покрытие (оценено / всего единиц)",
+         f"{format_report_number(coverage.get('scored_units'), 0)} / {format_report_number(coverage.get('total_units'), 0)}"),
+    ]
     plot_html = ""
-    if baseline is not None and current is not None:
-        plot_html = plot_km_dynamics(
-            name, baseline, current, accuracy, green_threshold, c_min_threshold
-        )
-
-    return f"""
-<h2 style="text-align: center;">Тест на динамику ключевой метрики</h2>
-<p style="text-align: left;"><b>Цель теста</b></p>
-<p style="text-align: left;">Оценить изменение ключевой метрики качества агента на мониторинговых данных относительно значения первичной валидации.</p>
-<p style="text-align: left;">Оценки мониторинговых диалогов выставляет автоассесор, откалиброванный на эталонной разметке тестовой корзины.</p>
-<p style="text-align: left;"><b>Алгоритм расчета</b></p>
-<ol style="text-align: left; margin-left: 20px; padding-left: 20px;">
-    <li style="text-align: left;">Единицы оценки формируются по assessment_mode контракта, ключевая метрика агрегируется по правилам monitoring_metric.</li>
-    <li style="text-align: left;">Вычисляется относительное снижение КМ мониторинга к КМ первичной валидации.</li>
-</ol>
-<p style="text-align: left;"><b>Критерии выставления светофора</b></p>
-<div style="text-align: left; width: 100%;">{criteria}</div><br>
-<p style="text-align: left;"><b>Результаты теста</b></p>
-<div style="text-align: left; width: 100%;">{results_html}</div><br>
-{plot_html}
-""".strip()
+    if baseline is not None and current is not None and color not in ("gray", "grey"):
+        plot_html = plot_km_dynamics(name, baseline, current, accuracy, green_threshold, c_min_threshold)
+    return render_test_report(
+        "6.3.4", "Динамика ключевой метрики качества",
+        "Оценить изменение ключевой метрики качества решения на корзине для мониторинга "
+        "относительно её значения, подтверждённого на первичной валидации.",
+        rows, color,
+        "Положительное относительное снижение означает уменьшение ключевой метрики; "
+        "отрицательное — рост. Жёлтый или красный результат служит основанием для дополнительной "
+        "асессорской разметки и разбора причин. Рост метрики может быть связан с более простыми "
+        "запросами или смещением оценок Автоасессора. При сером результате динамика не оценена.",
+        "По методике: СЗ выше E; корзина размечена Автоасессором с доверием не ниже среднего; "
+        "значение КМ на валидации положительно; доля невалидных оценок не выше 20 %. "
+        "Полный уровень доверия требует результата калибровки; одна точность его не подтверждает.",
+        f"Зелёный: относительное снижение не более {format_report_number(green_threshold, 0, percent=True)}. "
+        f"Жёлтый: между {format_report_number(green_threshold, 0, percent=True)} и "
+        f"{format_report_number(c_min_threshold, 0, percent=True)}. Красный: "
+        f"{format_report_number(c_min_threshold, 0, percent=True)} и более. "
+        "Серый: расчёт не дал оценку динамики; причина приведена под таблицей. "
+        "Светофор показан таким, каким его вернул тест.",
+        reason=reason, chart_html=plot_html,
+    )
 
 
 def _not_computable_result(
@@ -386,8 +320,9 @@ def _not_computable_result(
         if isinstance(baseline_payload, dict)
         else None
     )
-    baseline = None if baseline_value is None else float(baseline_value)
+    baseline = None if baseline_value is None or not math.isfinite(float(baseline_value)) else float(baseline_value)
     name = contract.get("name")
+    logging.warning(reason)
     details = status_details or {}
     metric_details = {
         "name": name,
@@ -417,6 +352,7 @@ def _not_computable_result(
             reason=reason,
             assessment_mode=contract.get("assessment_mode"),
             coverage=metric_details["coverage"],
+            c_min_threshold=c_min_threshold,
         ),
     }
 
@@ -517,18 +453,47 @@ def km_dynamics_test(
 
     override = _baseline_override_value(perv_validation_km)
     baseline = override if override is not None else float(contract["baseline"]["value"])
-    monitoring = compute_cluch_metrics(scored_df, contract)
+    scored_df = scored_df.copy()
+    raw_scores = pd.to_numeric(scored_df["main_metric"], errors="coerce")
+    valid_rows = raw_scores.map(math.isfinite)
+    if contract["baseline"]["scale"] == "ratio":
+        valid_rows &= raw_scores.between(0, 1)
+    scored_df["main_metric"] = raw_scores.where(valid_rows)
+    # До применения zero/fail отдельно считаем наличие исходной оценки единицы.
+    coverage_policy = "exclude_unit" if contract["scoring"]["missing_policy"] == "exclude_unit" else "exclude_value"
+    units = _unitize(scored_df, dict(contract, scoring={"sources": [], "missing_policy": coverage_policy}))
+    scores = pd.to_numeric(units.get("main_metric", pd.Series(dtype=float)), errors="coerce")
+    valid = scores.map(math.isfinite)
+    if contract["baseline"]["scale"] == "ratio":
+        valid &= scores.between(0, 1)
+    details = {"total_units": len(units), "scored_units": int(valid.sum())}
+    reason = None
+    if not math.isfinite(baseline) or baseline <= 0:
+        reason = "КМ первичной валидации должна быть конечным положительным числом."
+    elif not len(units) or not valid.any():
+        reason = "Нет валидных оценок Автоасессора за отчётный период."
+    elif int((~valid).sum()) > 0.2 * len(units):
+        reason = "Доля невалидных оценок Автоасессора превышает 20 %."
+    elif acc_auto is not None and (not math.isfinite(float(acc_auto)) or not 0.6 <= float(acc_auto) <= 1.0):
+        reason = "Точность Автоасессора ниже 0,6 или вне допустимого диапазона [0; 1]."
+    if reason:
+        return _not_computable_result(
+            dict(contract, baseline=dict(contract["baseline"], value=baseline)),
+            reason=reason, acc_auto=acc_auto, c_min_threshold=c_min_threshold,
+            status_details=details,
+        )
+    try:
+        monitoring = compute_cluch_metrics(scored_df, contract)
+    except MonitoringContractError as error:
+        return _not_computable_result(
+            dict(contract, baseline=dict(contract["baseline"], value=baseline)),
+            reason=str(error), acc_auto=acc_auto, c_min_threshold=c_min_threshold,
+            status_details=details,
+        )
     current = float(monitoring["value"])
+    delta = float((Decimal(str(baseline)) - Decimal(str(current))) / Decimal(str(baseline)))
 
-    if baseline == 0:
-        delta = 0.0 if current == 0 else None
-    else:
-        delta = (baseline - current) / baseline
-
-    if delta is None:
-        color = "gray"
-        reason = "Baseline КМ равен нулю, относительная динамика не определена."
-    elif delta >= c_min_threshold:
+    if delta >= c_min_threshold:
         color = "red"
         reason = "Снижение КМ больше допустимого отклонения."
     elif delta <= green_threshold:
@@ -571,5 +536,7 @@ def km_dynamics_test(
             reason=reason,
             assessment_mode=contract["assessment_mode"],
             coverage=metric_details["coverage"],
+            c_min_threshold=c_min_threshold,
+            green_threshold=green_threshold,
         ),
     }

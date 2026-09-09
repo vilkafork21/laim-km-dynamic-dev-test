@@ -125,7 +125,7 @@ def validate_monitoring_metric(payload: object, *, require_computed: bool = True
         count = role_counts[role]
         if count < minimum or (maximum is not None and count > maximum):
             raise MonitoringContractError(f"Недопустимое число источников роли {role}: {count}")
-    missing_policy = _require(scoring, "missing_policy", _MISSING)
+    _require(scoring, "missing_policy", _MISSING)
     denominator = scoring.get("majority_denominator")
     if method == "majority" and denominator not in {"declared", "present"}:
         raise MonitoringContractError("majority требует denominator declared или present")
@@ -572,7 +572,16 @@ def _unitize(frame: pd.DataFrame, contract: dict) -> pd.DataFrame:
                     part[column].tolist(), column
                 )
         if score_column in part:
-            record[score_column] = _constant(part[score_column].tolist(), score_column)
+            values = pd.to_numeric(part[score_column], errors="coerce")
+            policy = contract.get("scoring", {}).get("missing_policy", "exclude_value")
+            if values.isna().any() and policy == "fail":
+                raise MonitoringContractError("Пустой main_metric внутри dialogue при missing_policy=fail")
+            if policy == "zero":
+                values = values.fillna(0)
+            if policy == "exclude_unit" and values.isna().any():
+                record[score_column] = None
+            else:
+                record[score_column] = values.mean() if values.notna().any() else None
         records.append(record)
     return pd.DataFrame(records)
 
@@ -774,7 +783,7 @@ def prepare_drift_frames(
 
 def aggregate_main_metric(frame: pd.DataFrame, payload: dict) -> dict[str, object]:
     contract = validate_monitoring_metric(payload)
-    units = unitize(frame, contract)
+    units = _unitize(frame, dict(contract, scoring=dict(contract.get("scoring", {}), sources=[])))
     if "main_metric" not in units:
         raise MonitoringContractError("Нет main_metric для агрегации")
     records: list[tuple[Decimal, Decimal]] = []
