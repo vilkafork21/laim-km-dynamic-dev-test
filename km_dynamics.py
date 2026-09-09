@@ -221,7 +221,7 @@ def plot_km_dynamics(
         )
     arrow = "↓" if km_delta > 0 else ("↑" if km_delta < 0 else "→")
     ax.text(
-        dx - 0.05, (y_lo + y_hi) / 2.0, f"Δ = {km_delta:.1%}\n{arrow} {verdict}",
+        dx - 0.05, (y_lo + y_hi) / 2.0, f"Δ = {km_delta:.3f}\n{arrow} {verdict}",
         ha="right", va="center", fontsize=11, fontweight="bold", color=vcolor,
         bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor=vcolor, lw=1.4),
         zorder=5,
@@ -239,7 +239,7 @@ def plot_km_dynamics(
     accuracy_part = "" if accuracy is None else f"Точность автоасессора: {accuracy:.3f}    •    "
     ax.text(
         0.0, 1.012,
-        f"{accuracy_part}КМ: {baseline:.3f} → {current:.3f}    •    Δ = {km_delta:.1%}  ({verdict})",
+        f"{accuracy_part}КМ: {baseline:.3f} → {current:.3f}    •    Δ = {km_delta:.3f}  ({verdict})",
         transform=ax.transAxes, fontsize=10.5, color=vcolor, ha="left", fontweight="bold",
     )
     fig.tight_layout()
