@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import base64
 from copy import deepcopy
 from decimal import Decimal
 import json
-import io
 import logging
 import math
 import os
@@ -169,52 +167,37 @@ def plot_km_dynamics(
     green_threshold: float,
     c_min_threshold: float,
 ) -> str:
-    """Горизонтальная шкала относительного снижения КМ с порогами и отметкой результата."""
-    import matplotlib
+    """Компактная горизонтальная шкала изменения КМ с отметкой результата."""
+    from html import escape
+    from html_report import format_report_number
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    GREEN, AMBER, RED = "#2E9E5B", "#E0A800", "#D64545"
-    km_delta = float((Decimal(str(baseline)) - Decimal(str(current))) / Decimal(str(baseline)))
-    if km_delta >= c_min_threshold:
-        verdict, vcolor = "Критично", RED
-    elif km_delta <= green_threshold:
-        verdict, vcolor = "В норме", GREEN
-    else:
-        verdict, vcolor = "Внимание", AMBER
-
-    fig, ax = plt.subplots(figsize=(10, 2.8))
-    left = min(0.0, km_delta - 0.05)
-    right = max(c_min_threshold + 0.10, km_delta + 0.05)
-    for start, end, color in [
-        (left, green_threshold, GREEN),
-        (green_threshold, c_min_threshold, AMBER),
-        (c_min_threshold, right, RED),
-    ]:
-        ax.barh(0, end - start, left=start, height=0.24, color=color, alpha=0.8)
-    ax.vlines(km_delta, -0.2, 0.2, color="#253547", linewidth=2.5)
-    ax.plot(km_delta, 0.24, marker="v", color="#253547", markersize=9)
-    ax.text(
-        0, 1.12, f"Относительное снижение Δ = {km_delta:.1%} · {verdict}",
-        transform=ax.transAxes, fontsize=13, fontweight="bold", color=vcolor,
+    delta = float((Decimal(str(baseline)) - Decimal(str(current))) / Decimal(str(baseline)))
+    left = min(0.0, delta - 0.05)
+    right = max(c_min_threshold + 0.10, delta + 0.05)
+    span = right - left
+    green_end = 100 * (green_threshold - left) / span
+    red_start = 100 * (c_min_threshold - left) / span
+    marker = 100 * (delta - left) / span
+    label = f"Изменение метрики: {format_report_number(delta, 1, percent=True)}"
+    zones = "".join(
+        f'<span style="display:block;width:{width:.6f}%;height:100%;background:{color}"></span>'
+        for width, color in ((green_end, "#d6e7dc"),
+                             (red_start - green_end, "#f2e5c0"),
+                             (100 - red_start, "#ecd5d5"))
     )
-    for value, label in [(green_threshold, "Граница зелёной зоны"),
-                         (c_min_threshold, "Начало красной зоны")]:
-        ax.annotate(
-            f"{value:.0%}\n{label}", xy=(value, -0.14), xytext=(0, -10),
-            textcoords="offset points", ha="center", va="top", fontsize=9,
-        )
-    ax.set_xlim(left, right)
-    ax.set_ylim(-0.65, 0.45)
-    ax.set_axis_off()
-    fig.tight_layout()
-    buffer = io.BytesIO()
-    plt.savefig(buffer, dpi=200, bbox_inches="tight")
-    buffer.seek(0)
-    plot_base64 = base64.b64encode(buffer.read()).decode("ascii")
-    plt.close(fig)
-    return f'<img src="data:image/png;base64,{plot_base64}" alt="Динамика КМ" style="max-width:100%;">'
+    ticks = "".join(
+        f'<span style="position:absolute;left:{position:.6f}%;transform:translateX(-50%);'
+        f'white-space:nowrap">{format_report_number(value, 0, percent=True)}</span>'
+        for position, value in ((green_end, green_threshold), (red_start, c_min_threshold))
+    )
+    return f'''<div class="km-chart" role="img" aria-label="{escape(label)}"
+style="max-width:100%;margin:14px 0 18px;font:inherit;color:#374151">
+<p style="margin:0 0 12px;font-size:12.75px">{escape(label)}</p>
+<div class="km-scale" style="position:relative;display:flex;height:8px;margin:0 12px">
+{zones}<span class="km-marker" style="position:absolute;left:{marker:.6f}%;top:-5px;
+width:2px;height:18px;background:#374151;transform:translateX(-50%)"></span></div>
+<div style="position:relative;height:20px;margin:7px 12px 0;font-size:11px;color:#64748b">{ticks}</div>
+</div>'''
 
 
 def _report_html(
@@ -240,7 +223,7 @@ def _report_html(
         ("Ключевая метрика", name or "Не указана"),
         ("Значение КМ на первичной валидации (КМ вал)", format_report_number(baseline)),
         ("Значение КМ на мониторинге (КМ мон)", format_report_number(current)),
-        ("Относительное снижение Δ", format_report_number(delta, 1, percent=True)),
+        ("Изменение метрики", format_report_number(delta, 1, percent=True)),
         ("Режим оценки", mode),
         ("Покрытие (оценено / всего единиц)",
          f"{format_report_number(coverage.get('scored_units'), 0)} / {format_report_number(coverage.get('total_units'), 0)}"),
@@ -255,7 +238,8 @@ def _report_html(
         "Оценить изменение ключевой метрики качества решения на корзине для мониторинга "
         "относительно её значения, подтверждённого на первичной валидации.",
         rows, color,
-        "Положительное относительное снижение означает уменьшение ключевой метрики; "
+        "Изменение метрики показано в процентах от значения первичной валидации. "
+        "Положительное значение означает снижение ключевой метрики; "
         "отрицательное — рост. Жёлтый или красный результат служит основанием для дополнительной "
         "асессорской разметки и разбора причин. Рост метрики может быть связан с более простыми "
         "запросами или смещением оценок Автоасессора. При сером результате динамика не оценена.",

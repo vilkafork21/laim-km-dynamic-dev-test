@@ -57,6 +57,7 @@ def test_gray_result_does_not_show_green_chart():
     )
     assert "Не оценено" in html and "База равна нулю" in html
     assert '<img' not in html
+    assert 'class="km-chart"' not in html
 
 
 @pytest.mark.parametrize("accuracy", [None, 0.583])
@@ -69,30 +70,20 @@ def test_report_contains_only_available_assessor_statistics(accuracy):
     assert ("Точность Автоасессора (Acc auto)" in html) == (accuracy is not None)
 
 
-@pytest.mark.parametrize("current,verdict", [
-    (1.1, "В норме"), (1., "В норме"), (.85, "В норме"),
-    (.84, "Внимание"), (.75, "Критично"), (0., "Критично"),
-])
-def test_horizontal_scale_marks_actual_decline(monkeypatch, current, verdict):
-    import matplotlib.pyplot as plt
+@pytest.mark.parametrize("current", [1.1, 1., .85, .84, .75, 0.])
+def test_horizontal_scale_marks_actual_decline(current):
+    import re
+    from html_report import format_report_number
 
-    figures = []
-    savefig = plt.savefig
-
-    def capture(*args, **kwargs):
-        figures.append(plt.gcf())
-        return savefig(*args, **kwargs)
-
-    monkeypatch.setattr(plt, "savefig", capture)
     html = NODE.plot_km_dynamics("F1-мера", 1., current, .583, .15, .25)
-    ax = figures[0].axes[0]
-    assert html.startswith('<img src="data:image/png;base64,')
-    zones = ax.patches
-    assert len(zones) == 3
-    assert all(zone.get_y() == -.12 and zone.get_height() == .24 for zone in zones)
-    assert zones[0].get_x() + zones[0].get_width() == pytest.approx(.15)
-    assert zones[1].get_x() + zones[1].get_width() == pytest.approx(.25)
-    marker = ax.lines[0].get_xdata()[0]
-    assert marker == pytest.approx(1. - current)
-    assert ax.get_xlim()[0] <= marker <= ax.get_xlim()[1]
-    assert verdict in ax.texts[0].get_text()
+    assert 'role="img"' in html
+    assert "Изменение метрики: " + format_report_number(1. - current, 1, percent=True) in html
+    assert "15 %" in html and "25 %" in html
+    marker = float(re.search(r'class="km-marker" style="position:absolute;left:([0-9.]+)%', html)[1])
+    left = min(0., 1. - current - .05)
+    right = max(.35, 1. - current + .05)
+    assert marker == pytest.approx(100 * (1. - current - left) / (right - left))
+    assert 0 <= marker <= 100
+    widths = [float(value) for value in re.findall(r'display:block;width:([0-9.]+)%', html)]
+    assert len(widths) == 3 and all(value >= 0 for value in widths)
+    assert sum(widths) == pytest.approx(100)
