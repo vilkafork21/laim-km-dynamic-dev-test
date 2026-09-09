@@ -57,3 +57,13 @@ def test_gray_result_does_not_show_green_chart():
     )
     assert "Не оценено" in html and "База равна нулю" in html
     assert '<img' not in html
+
+
+@pytest.mark.parametrize("accuracy", [None, 0.583])
+def test_report_contains_only_available_assessor_statistics(accuracy):
+    html = NODE._report_html(
+        "F1-мера", .76, None, None, accuracy, "gray", reason="Нет оценок",
+        assessment_mode="qa", coverage={"scored_units": 0, "total_units": 988},
+    )
+    assert "доверия" not in html and "R κ" not in html
+    assert ("Точность Автоасессора (Acc auto)" in html) == (accuracy is not None)

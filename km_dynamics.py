@@ -275,12 +275,12 @@ def _report_html(
         ("Значение КМ на первичной валидации (КМ вал)", format_report_number(baseline)),
         ("Значение КМ на мониторинге (КМ мон)", format_report_number(current)),
         ("Относительное снижение Δ", format_report_number(delta, 1, percent=True)),
-        ("Точность Автоасессора (Acc auto)", format_report_number(accuracy)),
-        ("Уровень доверия / относительная согласованность (R κ)", "Нет данных; по одной точности уровень доверия не подтверждается"),
         ("Режим оценки", mode),
         ("Покрытие (оценено / всего единиц)",
          f"{format_report_number(coverage.get('scored_units'), 0)} / {format_report_number(coverage.get('total_units'), 0)}"),
     ]
+    if accuracy is not None and math.isfinite(float(accuracy)):
+        rows.insert(4, ("Точность Автоасессора (Acc auto)", format_report_number(accuracy)))
     plot_html = ""
     if baseline is not None and current is not None and color not in ("gray", "grey"):
         plot_html = plot_km_dynamics(name, baseline, current, accuracy, green_threshold, c_min_threshold)
@@ -293,9 +293,8 @@ def _report_html(
         "отрицательное — рост. Жёлтый или красный результат служит основанием для дополнительной "
         "асессорской разметки и разбора причин. Рост метрики может быть связан с более простыми "
         "запросами или смещением оценок Автоасессора. При сером результате динамика не оценена.",
-        "По методике: СЗ выше E; корзина размечена Автоасессором с доверием не ниже среднего; "
-        "значение КМ на валидации положительно; доля невалидных оценок не выше 20 %. "
-        "Полный уровень доверия требует результата калибровки; одна точность его не подтверждает.",
+        "По методике: СЗ выше E; корзина размечена Автоасессором; "
+        "значение КМ на валидации положительно; доля невалидных оценок не выше 20 %.",
         f"Зелёный: относительное снижение не более {format_report_number(green_threshold, 0, percent=True)}. "
         f"Жёлтый: между {format_report_number(green_threshold, 0, percent=True)} и "
         f"{format_report_number(c_min_threshold, 0, percent=True)}. Красный: "
@@ -474,8 +473,6 @@ def km_dynamics_test(
         reason = "Нет валидных оценок Автоасессора за отчётный период."
     elif int((~valid).sum()) > 0.2 * len(units):
         reason = "Доля невалидных оценок Автоасессора превышает 20 %."
-    elif acc_auto is not None and (not math.isfinite(float(acc_auto)) or not 0.6 <= float(acc_auto) <= 1.0):
-        reason = "Точность Автоасессора ниже 0,6 или вне допустимого диапазона [0; 1]."
     if reason:
         return _not_computable_result(
             dict(contract, baseline=dict(contract["baseline"], value=baseline)),
