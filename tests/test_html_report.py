@@ -67,3 +67,32 @@ def test_report_contains_only_available_assessor_statistics(accuracy):
     )
     assert "доверия" not in html and "R κ" not in html
     assert ("Точность Автоасессора (Acc auto)" in html) == (accuracy is not None)
+
+
+@pytest.mark.parametrize("current,verdict", [
+    (1.1, "В норме"), (1., "В норме"), (.85, "В норме"),
+    (.84, "Внимание"), (.75, "Критично"), (0., "Критично"),
+])
+def test_horizontal_scale_marks_actual_decline(monkeypatch, current, verdict):
+    import matplotlib.pyplot as plt
+
+    figures = []
+    savefig = plt.savefig
+
+    def capture(*args, **kwargs):
+        figures.append(plt.gcf())
+        return savefig(*args, **kwargs)
+
+    monkeypatch.setattr(plt, "savefig", capture)
+    html = NODE.plot_km_dynamics("F1-мера", 1., current, .583, .15, .25)
+    ax = figures[0].axes[0]
+    assert html.startswith('<img src="data:image/png;base64,')
+    zones = ax.patches
+    assert len(zones) == 3
+    assert all(zone.get_y() == -.12 and zone.get_height() == .24 for zone in zones)
+    assert zones[0].get_x() + zones[0].get_width() == pytest.approx(.15)
+    assert zones[1].get_x() + zones[1].get_width() == pytest.approx(.25)
+    marker = ax.lines[0].get_xdata()[0]
+    assert marker == pytest.approx(1. - current)
+    assert ax.get_xlim()[0] <= marker <= ax.get_xlim()[1]
+    assert verdict in ax.texts[0].get_text()

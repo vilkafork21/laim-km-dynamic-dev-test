@@ -169,79 +169,45 @@ def plot_km_dynamics(
     green_threshold: float,
     c_min_threshold: float,
 ) -> str:
-    """График динамики КМ из dev-версии ноды: валидация против мониторинга,
-    пороговые зоны и дельта; возвращает html c base64-изображением."""
+    """Горизонтальная шкала относительного снижения КМ с порогами и отметкой результата."""
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    GREEN, AMBER, RED, NEUTRAL = "#2E9E5B", "#E0A800", "#D64545", "#5B6B7B"
-    km_delta = (baseline - current) / baseline if baseline else float("nan")
-    y_green = baseline * (1.0 - green_threshold)
-    y_red = baseline * (1.0 - c_min_threshold)
-    if current >= y_green:
-        verdict, vcolor = "В норме", GREEN
-    elif current <= y_red:
+    GREEN, AMBER, RED = "#2E9E5B", "#E0A800", "#D64545"
+    km_delta = float((Decimal(str(baseline)) - Decimal(str(current))) / Decimal(str(baseline)))
+    if km_delta >= c_min_threshold:
         verdict, vcolor = "Критично", RED
+    elif km_delta <= green_threshold:
+        verdict, vcolor = "В норме", GREEN
     else:
         verdict, vcolor = "Внимание", AMBER
 
-    fig, ax = plt.subplots(figsize=(12, 7))
-    ax.set_axisbelow(True)
-    ax.grid(True, axis="y", alpha=0.25, linestyle="--", linewidth=0.8)
-    y_top = max(1.0, baseline, current)
-    ax.axhspan(y_green, y_top, color=GREEN, alpha=0.06, zorder=0)
-    ax.axhspan(y_red, y_green, color=AMBER, alpha=0.06, zorder=0)
-    ax.axhspan(0, y_red, color=RED, alpha=0.06, zorder=0)
-    for y, c, txt in [
-        (y_green, GREEN, f"Порог «в норме» ≥ {y_green:.3f}"),
-        (y_red, RED, f"Порог «критично» ≤ {y_red:.3f}"),
+    fig, ax = plt.subplots(figsize=(10, 2.8))
+    left = min(0.0, km_delta - 0.05)
+    right = max(c_min_threshold + 0.10, km_delta + 0.05)
+    for start, end, color in [
+        (left, green_threshold, GREEN),
+        (green_threshold, c_min_threshold, AMBER),
+        (c_min_threshold, right, RED),
     ]:
-        ax.axhline(y, color=c, lw=1.4, alpha=0.75, zorder=1)
-        ax.text(1.58, y, txt, color=c, fontsize=9.5, va="center", ha="left", fontweight="bold")
-    positions = [0, 1]
-    values = [baseline, current]
-    ax.bar(
-        positions, values, width=0.46, color=[NEUTRAL, vcolor],
-        edgecolor="white", linewidth=1.5, zorder=3,
+        ax.barh(0, end - start, left=start, height=0.24, color=color, alpha=0.8)
+    ax.vlines(km_delta, -0.2, 0.2, color="#253547", linewidth=2.5)
+    ax.plot(km_delta, 0.24, marker="v", color="#253547", markersize=9)
+    ax.text(
+        0, 1.12, f"Относительное снижение Δ = {km_delta:.1%} · {verdict}",
+        transform=ax.transAxes, fontsize=13, fontweight="bold", color=vcolor,
     )
-    for x, v in zip(positions, values):
-        ax.text(
-            x, v + 0.018, f"{v:.3f}", ha="center", va="bottom",
-            fontsize=13, fontweight="bold", color="#222222", zorder=4,
-        )
-    ax.hlines(baseline, positions[0], positions[1], color="#888888", lw=1.2, linestyle=":", zorder=2)
-    dx = positions[1] - 0.30
-    y_lo, y_hi = min(baseline, current), max(baseline, current)
-    if abs(y_hi - y_lo) > 1e-6:
+    for value, label in [(green_threshold, "Граница зелёной зоны"),
+                         (c_min_threshold, "Начало красной зоны")]:
         ax.annotate(
-            "", xy=(dx, y_hi), xytext=(dx, y_lo),
-            arrowprops=dict(arrowstyle="<->", color=vcolor, lw=2.2), zorder=4,
+            f"{value:.0%}\n{label}", xy=(value, -0.14), xytext=(0, -10),
+            textcoords="offset points", ha="center", va="top", fontsize=9,
         )
-    arrow = "↓" if km_delta > 0 else ("↑" if km_delta < 0 else "→")
-    ax.text(
-        dx - 0.05, (y_lo + y_hi) / 2.0, f"Δ = {km_delta:.3f}\n{arrow} {verdict}",
-        ha="right", va="center", fontsize=11, fontweight="bold", color=vcolor,
-        bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor=vcolor, lw=1.4),
-        zorder=5,
-    )
-    ax.set_xticks(positions)
-    ax.set_xticklabels(["Первичная валидация", "Мониторинг"], fontsize=12, fontweight="bold")
-    ax.set_xlim(-0.6, 2.35)
-    ax.set_ylim(0, y_top * 1.10)
-    ax.set_ylabel("Значение КМ", fontsize=12, fontweight="bold")
-    ax.set_title("Динамика ключевой метрики", fontsize=16, fontweight="bold", pad=26)
-    ax.text(
-        0.0, 1.045, str(name or "Ключевая метрика"),
-        transform=ax.transAxes, fontsize=10.5, color="#444444", ha="left", style="italic",
-    )
-    accuracy_part = "" if accuracy is None else f"Точность автоасессора: {accuracy:.3f}    •    "
-    ax.text(
-        0.0, 1.012,
-        f"{accuracy_part}КМ: {baseline:.3f} → {current:.3f}    •    Δ = {km_delta:.3f}  ({verdict})",
-        transform=ax.transAxes, fontsize=10.5, color=vcolor, ha="left", fontweight="bold",
-    )
+    ax.set_xlim(left, right)
+    ax.set_ylim(-0.65, 0.45)
+    ax.set_axis_off()
     fig.tight_layout()
     buffer = io.BytesIO()
     plt.savefig(buffer, dpi=200, bbox_inches="tight")
